@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Research Report</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --border: #2a2f3d; --text: #e6e8ef; --muted: #8890a4;
+    --done: #3fb27f; --accent: #6d8dff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", system-ui, sans-serif; }
+  header { padding: 20px 28px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: start; gap: 16px; flex-wrap: wrap; }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--muted); font-size: 12px; }
+  .actions { display: flex; gap: 8px; }
+  .actions button { background: var(--panel); border: 1px solid var(--border); color: var(--text);
+                     border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+  .actions a { text-decoration: none; }
+
+  #flow { padding: 24px 28px 60px; max-width: 1000px; margin: 0 auto; }
+  .node { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .node h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .node .body { font-size: 13px; color: var(--muted); white-space: pre-wrap; line-height: 1.6; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--done); flex-shrink: 0; }
+
+  #agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 14px; }
+  #final .body { color: var(--text); }
+  #loading, #err { padding: 40px 28px; color: var(--muted); }
+
+  @media print {
+    body { background: #fff; color: #000; }
+    .node { background: #fff; border-color: #ccc; }
+    .node .body { color: #333; }
+    header .actions { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="goalTitle">読み込み中…</h1>
+    <p id="meta"></p>
+  </div>
+  <div class="actions">
+    <button id="copyBtn">共有リンクをコピー</button>
+    <a id="mdLink" href="#"><button>Markdownをダウンロード</button></a>
+    <button onclick="window.print()">PDFとして保存</button>
+  </div>
+</header>
+
+<div id="flow">
+  <div id="loading">読み込み中…</div>
+  <div id="content" style="display:none">
+    <div id="agents"></div>
+    <div id="final" class="node">
+      <h3><span class="dot"></span> Final Output</h3>
+      <div class="body" id="finalBody"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+const runId = location.pathname.split("/").pop();
+document.getElementById("mdLink").href = `/api/runs/${runId}/markdown`;
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  await navigator.clipboard.writeText(location.href);
+  document.getElementById("copyBtn").textContent = "コピーしました";
+  setTimeout(() => (document.getElementById("copyBtn").textContent = "共有リンクをコピー"), 1500);
+});
+
+(async () => {
+  const res = await fetch(`/api/runs/${runId}`);
+  if (!res.ok) {
+    document.getElementById("loading").textContent = "このリサーチ結果は見つかりませんでした。";
+    return;
+  }
+  const run = await res.json();
+  document.getElementById("goalTitle").textContent = run.goal;
+  document.getElementById("meta").textContent = `完了: ${new Date(run.completedAt).toLocaleString("ja-JP")}`;
+
+  const agentsEl = document.getElementById("agents");
+  for (const t of run.subtasks) {
+    const div = document.createElement("div");
+    div.className = "node";
+    div.innerHTML = `<h3><span class="dot"></span> ${escapeHtml(t.title)}</h3><div class="body">${escapeHtml(t.output)}</div>`;
+    agentsEl.appendChild(div);
+  }
+  document.getElementById("finalBody").textContent = run.final;
+
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("content").style.display = "block";
+})();
+</script>
+</body>
+</html>

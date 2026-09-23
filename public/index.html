@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>AI Orchestration Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --border: #2a2f3d; --text: #e6e8ef; --muted: #8890a4;
+    --queued: #4a5066; --running: #d9a441; --done: #3fb27f; --error: #e5534b; --accent: #6d8dff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", system-ui, sans-serif; }
+  header { padding: 20px 28px; border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+
+  #runForm { display: flex; gap: 10px; padding: 16px 28px; border-bottom: 1px solid var(--border); }
+  #goal { flex: 1; background: var(--panel); border: 1px solid var(--border); color: var(--text);
+          border-radius: 8px; padding: 10px 14px; font-size: 14px; resize: none; }
+  #runBtn { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 0 22px;
+            font-size: 14px; font-weight: 600; cursor: pointer; }
+  #runBtn:disabled { opacity: .5; cursor: default; }
+  #status { padding: 4px 28px; color: var(--muted); font-size: 12px; min-height: 18px; }
+
+  #flow { padding: 24px 28px 60px; max-width: 1000px; margin: 0 auto; }
+  .node { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .node h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .node .body { font-size: 13px; color: var(--muted); white-space: pre-wrap; line-height: 1.5; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--queued); flex-shrink: 0; }
+  .dot.running { background: var(--running); animation: pulse 1s infinite ease-in-out; }
+  .dot.done { background: var(--done); }
+  .dot.error { background: var(--error); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  .connector { width: 2px; height: 22px; background: var(--border); margin: 0 auto; }
+
+  #orchestrator { max-width: 420px; margin: 0 auto; text-align: center; }
+  #agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 4px; }
+  #agents .node .body { max-height: 160px; overflow-y: auto; }
+  #final { max-width: 720px; margin: 0 auto; }
+  #final .body { color: var(--text); }
+  #shareBar { max-width: 720px; margin: 10px auto 0; display: flex; gap: 8px; }
+  #shareBar a { text-decoration: none; }
+  #shareBar button { background: var(--panel); border: 1px solid var(--border); color: var(--text);
+                      border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Orchestration Dashboard</h1>
+  <p>目標を1つ入力すると、プランナーがサブタスクに分割し、複数のClaudeエージェントが並列実行します。</p>
+</header>
+
+<form id="runForm">
+  <textarea id="goal" rows="1" placeholder="例: 新製品ローンチのマーケティング案を作って" required></textarea>
+  <button id="runBtn" type="submit">実行</button>
+</form>
+<div id="status"></div>
+
+<div id="flow">
+  <div id="orchestrator" class="node">
+    <h3><span id="orchDot" class="dot"></span> Orchestrator (Planner)</h3>
+    <div id="orchBody" class="body">待機中…</div>
+  </div>
+  <div id="toAgents" class="connector hidden"></div>
+  <div id="agents"></div>
+  <div id="toFinal" class="connector hidden"></div>
+  <div id="final" class="node hidden">
+    <h3><span id="finalDot" class="dot"></span> Final Output</h3>
+    <div id="finalBody" class="body"></div>
+  </div>
+  <div id="shareBar" class="hidden">
+    <button id="copyShareBtn">共有リンクをコピー</button>
+    <a id="mdDownload" href="#" target="_blank"><button>Markdownをダウンロード</button></a>
+  </div>
+</div>
+
+<script>
+const form = document.getElementById("runForm");
+const goalInput = document.getElementById("goal");
+const runBtn = document.getElementById("runBtn");
+const statusEl = document.getElementById("status");
+const orchDot = document.getElementById("orchDot");
+const orchBody = document.getElementById("orchBody");
+const agentsEl = document.getElementById("agents");
+const toAgents = document.getElementById("toAgents");
+const toFinal = document.getElementById("toFinal");
+const finalNode = document.getElementById("final");
+const finalDot = document.getElementById("finalDot");
+const finalBody = document.getElementById("finalBody");
+const shareBar = document.getElementById("shareBar");
+const copyShareBtn = document.getElementById("copyShareBtn");
+const mdDownload = document.getElementById("mdDownload");
+
+let currentRunId = null;
+
+const ws = new WebSocket(`ws://${location.host}`);
+ws.addEventListener("message", (ev) => {
+  const e = JSON.parse(ev.data);
+  if (e.runId !== currentRunId) return;
+  handle(e);
+});
+
+function resetBoard() {
+  orchDot.className = "dot running";
+  orchBody.textContent = "サブタスクへ分割中…";
+  agentsEl.innerHTML = "";
+  toAgents.classList.add("hidden");
+  toFinal.classList.add("hidden");
+  finalNode.classList.add("hidden");
+  finalDot.className = "dot";
+  finalBody.textContent = "";
+  shareBar.classList.add("hidden");
+}
+
+function agentCard(task) {
+  const div = document.createElement("div");
+  div.className = "node";
+  div.id = `agent-${task.id}`;
+  div.innerHTML = `<h3><span class="dot" id="dot-${task.id}"></span> ${escapeHtml(task.title)}</h3>
+                    <div class="body" id="body-${task.id}">待機中…</div>`;
+  return div;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function handle(e) {
+  switch (e.type) {
+    case "run:start":
+      break;
+    case "plan:ready":
+      orchDot.className = "dot done";
+      orchBody.textContent = `${e.subtasks.length}件のサブタスクに分割しました`;
+      toAgents.classList.remove("hidden");
+      for (const t of e.subtasks) agentsEl.appendChild(agentCard(t));
+      break;
+    case "agent:start":
+      document.getElementById(`dot-${e.id}`).className = "dot running";
+      document.getElementById(`body-${e.id}`).textContent = "実行中…";
+      break;
+    case "agent:done":
+      document.getElementById(`dot-${e.id}`).className = "dot done";
+      document.getElementById(`body-${e.id}`).textContent = e.output;
+      break;
+    case "agent:error":
+      document.getElementById(`dot-${e.id}`).className = "dot error";
+      document.getElementById(`body-${e.id}`).textContent = `エラー: ${e.message}`;
+      break;
+    case "synthesis:start":
+      toFinal.classList.remove("hidden");
+      finalNode.classList.remove("hidden");
+      finalDot.className = "dot running";
+      finalBody.textContent = "統合中…";
+      break;
+    case "run:complete":
+      finalDot.className = "dot done";
+      finalBody.textContent = e.final;
+      statusEl.textContent = "完了";
+      runBtn.disabled = false;
+      mdDownload.href = `/api/runs/${e.runId}/markdown`;
+      copyShareBtn.onclick = async () => {
+        await navigator.clipboard.writeText(`${location.origin}/r/${e.runId}`);
+        copyShareBtn.textContent = "コピーしました";
+        setTimeout(() => (copyShareBtn.textContent = "共有リンクをコピー"), 1500);
+      };
+      shareBar.classList.remove("hidden");
+      break;
+    case "run:error":
+      statusEl.textContent = `エラー: ${e.message}`;
+      orchDot.className = "dot error";
+      runBtn.disabled = false;
+      break;
+  }
+}
+
+form.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const goal = goalInput.value.trim();
+  if (!goal) return;
+  runBtn.disabled = true;
+  statusEl.textContent = "開始しています…";
+  resetBoard();
+
+  const res = await fetch("/api/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ goal }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    statusEl.textContent = `エラー: ${data.error}`;
+    runBtn.disabled = false;
+    return;
+  }
+  currentRunId = data.runId;
+  statusEl.textContent = "実行中…";
+});
+</script>
+</body>
+</html>

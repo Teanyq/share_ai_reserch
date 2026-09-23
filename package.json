@@ -1,0 +1,14 @@
+{
+  "name": "ai-orchestration-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "express": "^4.21.1",
+    "ws": "^8.18.0"
+  }
+}
