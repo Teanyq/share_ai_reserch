@@ -26,9 +26,10 @@
             font-size: 14px; font-weight: 600; cursor: pointer; }
   #runBtn:disabled { opacity: .5; cursor: default; }
   #status { padding: 4px 28px; color: var(--muted); font-size: 12px; min-height: 18px; }
-  #accessCodeRow { padding: 0 28px 12px; }
+  #accessCodeRow { padding: 0 28px 12px; display: flex; align-items: center; gap: 10px; }
   #accessCode { width: 240px; max-width: 100%; background: var(--panel); border: 1px solid var(--border);
                 color: var(--muted); border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+  #accessCodeRow a { color: var(--accent); font-size: 12px; text-decoration: none; }
 
   #flow { padding: 24px 28px 60px; max-width: 1000px; margin: 0 auto; }
   .node { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
@@ -69,6 +70,7 @@
 </form>
 <div id="accessCodeRow">
   <input id="accessCode" type="text" placeholder="アクセスコード(note会員限定・任意)" autocomplete="off">
+  <a href="https://note.com/teanyq/membership" target="_blank">未入会の方はこちら</a>
 </div>
 <div id="status"></div>
 
