@@ -15,7 +15,7 @@ const DATA_DIR = path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
 
 const app = express();
-app.set("trust proxy", 1); // adjust hop count to match the actual reverse proxy at deploy time
+app.set("trust proxy", 2); // Render: Cloudflare edge + Render's internal LB in front of the app (see /debug/ip)
 app.use(express.json());
 // Without this, a malformed JSON body makes Express's default handler render a raw stack
 // trace (including this machine's filesystem paths) as the HTTP response.
