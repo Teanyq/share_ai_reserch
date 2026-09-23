@@ -4,7 +4,7 @@ import path from "node:path";
 import express from "express";
 import { WebSocketServer } from "ws";
 import Anthropic from "@anthropic-ai/sdk";
-import { extractJson, normalizeSubtasks, toMarkdown, createRateLimiter, UUID_RE } from "./lib.js";
+import { extractJson, normalizeSubtasks, toMarkdown, createRateLimiter, UUID_RE, isPremiumRequest } from "./lib.js";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
 
@@ -67,6 +67,11 @@ async function askClaude(system, prompt) {
 
 const RATE_LIMIT = { windowMs: 60 * 60 * 1000, max: 10 };
 const checkRateLimit = createRateLimiter(RATE_LIMIT);
+
+// Phase 2 (manual note membership billing): paying members get this code from a
+// members-only note post and paste it in to lift the free-tier rate limit. One shared
+// code, not per-user — rotate it (update the env var) if it ever leaks outside members.
+const PREMIUM_CODE = process.env.PREMIUM_CODE || null;
 
 async function runOrchestration(runId, goal) {
   broadcast({ type: "run:start", runId, goal });
@@ -158,8 +163,11 @@ app.post("/api/run", (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) {
     return res.status(400).json({ error: "ANTHROPIC_API_KEY is not set (create a .env file)" });
   }
-  if (!checkRateLimit(req.ip)) {
-    return res.status(429).json({ error: `1時間あたり${RATE_LIMIT.max}回までです。しばらくしてから再度お試しください` });
+  const isPremium = isPremiumRequest(req.body.accessCode, PREMIUM_CODE);
+  if (!isPremium && !checkRateLimit(req.ip)) {
+    return res.status(429).json({
+      error: `1時間あたり${RATE_LIMIT.max}回までです。しばらくしてから再度お試しください（note会員の方はアクセスコードを入力すると無制限になります）`,
+    });
   }
   const goal = typeof req.body.goal === "string" ? req.body.goal.trim() : "";
   if (!goal) return res.status(400).json({ error: "goal is required" });

@@ -90,3 +90,9 @@ export function createRateLimiter({ windowMs, max, sweep = true }) {
 }
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Phase 2 paywall: a single shared code (from a members-only note post) bypasses the
+// free-tier rate limit. No code configured (premiumCode falsy) means the feature is off.
+export function isPremiumRequest(accessCode, premiumCode) {
+  return Boolean(premiumCode) && accessCode === premiumCode;
+}

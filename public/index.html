@@ -26,6 +26,9 @@
             font-size: 14px; font-weight: 600; cursor: pointer; }
   #runBtn:disabled { opacity: .5; cursor: default; }
   #status { padding: 4px 28px; color: var(--muted); font-size: 12px; min-height: 18px; }
+  #accessCodeRow { padding: 0 28px 12px; }
+  #accessCode { width: 240px; max-width: 100%; background: var(--panel); border: 1px solid var(--border);
+                color: var(--muted); border-radius: 6px; padding: 6px 10px; font-size: 12px; }
 
   #flow { padding: 24px 28px 60px; max-width: 1000px; margin: 0 auto; }
   .node { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
@@ -50,6 +53,8 @@
                       border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
 
   .hidden { display: none !important; }
+  footer { text-align: center; padding: 20px; }
+  footer a { color: var(--muted); font-size: 12px; text-decoration: none; }
 </style>
 </head>
 <body>
@@ -62,6 +67,9 @@
   <textarea id="goal" rows="1" maxlength="500" placeholder="例: 新製品ローンチのマーケティング案を作って" required></textarea>
   <button id="runBtn" type="submit">実行</button>
 </form>
+<div id="accessCodeRow">
+  <input id="accessCode" type="text" placeholder="アクセスコード(note会員限定・任意)" autocomplete="off">
+</div>
 <div id="status"></div>
 
 <div id="flow">
@@ -81,6 +89,7 @@
     <a id="mdDownload" href="#" target="_blank"><button>Markdownをダウンロード</button></a>
   </div>
 </div>
+<footer><a href="/legal.html">特定商取引法に基づく表記</a></footer>
 
 <script src="/render.js"></script>
 <script>
@@ -88,6 +97,19 @@ mermaid.initialize({ startOnLoad: false, theme: "dark" });
 
 const form = document.getElementById("runForm");
 const goalInput = document.getElementById("goal");
+const accessCodeInput = document.getElementById("accessCode");
+try {
+  accessCodeInput.value = localStorage.getItem("accessCode") || "";
+} catch {
+  // localStorage unavailable (private browsing etc.) — code just won't be remembered
+}
+accessCodeInput.addEventListener("change", () => {
+  try {
+    localStorage.setItem("accessCode", accessCodeInput.value.trim());
+  } catch {
+    // ignore
+  }
+});
 const runBtn = document.getElementById("runBtn");
 const statusEl = document.getElementById("status");
 const orchDot = document.getElementById("orchDot");
@@ -222,7 +244,7 @@ form.addEventListener("submit", async (ev) => {
   const res = await fetch("/api/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ goal }),
+    body: JSON.stringify({ goal, accessCode: accessCodeInput.value.trim() }),
   });
   const data = await res.json();
   if (!res.ok) {

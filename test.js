@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractJson, normalizeSubtasks, toMarkdown, createRateLimiter, UUID_RE } from "./lib.js";
+import { extractJson, normalizeSubtasks, toMarkdown, createRateLimiter, UUID_RE, isPremiumRequest } from "./lib.js";
 
 test("extractJson pulls a JSON array out of surrounding prose", () => {
   const raw = 'Sure, here you go:\n[{"id":"a1","title":"x"}]\nhope that helps';
@@ -76,6 +76,14 @@ test("rate limiter tracks keys independently", () => {
   const check = createRateLimiter({ windowMs: 1000, max: 1 });
   assert.equal(check("ip1", 0), true);
   assert.equal(check("ip2", 0), true);
+});
+
+test("isPremiumRequest requires a matching code and a configured premium code", () => {
+  assert.equal(isPremiumRequest("secret123", "secret123"), true);
+  assert.equal(isPremiumRequest("wrong", "secret123"), false);
+  assert.equal(isPremiumRequest(undefined, "secret123"), false);
+  assert.equal(isPremiumRequest("secret123", null), false); // feature off when no code configured
+  assert.equal(isPremiumRequest("secret123", ""), false);
 });
 
 test("UUID_RE matches valid UUIDs and rejects path traversal attempts", () => {
