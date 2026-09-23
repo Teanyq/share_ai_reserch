@@ -17,6 +17,12 @@ mkdirSync(DATA_DIR, { recursive: true });
 const app = express();
 app.set("trust proxy", 1); // adjust hop count to match the actual reverse proxy at deploy time
 app.use(express.json());
+// Without this, a malformed JSON body makes Express's default handler render a raw stack
+// trace (including this machine's filesystem paths) as the HTTP response.
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && "body" in err) return res.status(400).json({ error: "invalid JSON body" });
+  next(err);
+});
 app.use(express.static("public"));
 
 const server = app.listen(process.env.PORT || 3300, () =>
@@ -106,7 +112,9 @@ async function runOrchestration(runId, goal) {
         "Format as clean markdown: headings, bullet/numbered lists, and tables when comparing items. " +
         "If the answer describes a process, sequence of steps, or decision flow, include one small " +
         "```mermaid flowchart TD``` diagram to illustrate it — omit the diagram entirely if the content " +
-        "is not naturally a process/flow (e.g. a simple list or single recommendation).",
+        "is not naturally a process/flow (e.g. a simple list or single recommendation). " +
+        "Keep Mermaid syntax valid: wrap every node label in double quotes, e.g. A[\"入社前準備\"], " +
+        "never use raw parentheses/colons/quotes inside an unquoted label, and keep it under 10 nodes.",
       `Goal: ${goal}\n\nSub-agent results:\n${summary}`
     );
     broadcast({ type: "run:complete", runId, final });
@@ -162,4 +170,10 @@ app.post("/api/run", (req, res) => {
   runOrchestration(runId, goal).catch((err) =>
     broadcast({ type: "run:error", runId, message: err.message })
   );
+});
+
+// Catch-all so an unexpected error in any route never leaks a stack trace / filesystem path.
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: "internal server error" });
 });

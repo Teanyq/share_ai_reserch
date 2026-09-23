@@ -186,6 +186,7 @@ function handle(e) {
       finalDot.className = "dot done";
       renderMarkdownInto(finalBody, e.final);
       statusEl.textContent = "完了";
+      submitting = false;
       runBtn.disabled = false;
       mdDownload.href = `/api/runs/${e.runId}/markdown`;
       copyShareBtn.onclick = async () => {
@@ -198,15 +199,22 @@ function handle(e) {
     case "run:error":
       statusEl.textContent = `エラー: ${e.message}`;
       orchDot.className = "dot error";
+      submitting = false;
       runBtn.disabled = false;
       break;
   }
 }
 
+let submitting = false;
 form.addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  // runBtn.disabled alone isn't enough: form.requestSubmit() and some browsers' Enter-key
+  // handling can re-enter this handler without going through a real click on the (disabled)
+  // button, which was firing multiple paid API runs from a single accidental double-submit.
+  if (submitting) return;
   const goal = goalInput.value.trim();
   if (!goal) return;
+  submitting = true;
   runBtn.disabled = true;
   statusEl.textContent = "開始しています…";
   resetBoard();
@@ -219,6 +227,7 @@ form.addEventListener("submit", async (ev) => {
   const data = await res.json();
   if (!res.ok) {
     statusEl.textContent = `エラー: ${data.error}`;
+    submitting = false;
     runBtn.disabled = false;
     return;
   }
