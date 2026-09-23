@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI Orchestration Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<link rel="stylesheet" href="/markdown.css">
 <style>
   :root {
     --bg: #0f1117; --panel: #171a23; --border: #2a2f3d; --text: #e6e8ef; --muted: #8890a4;
@@ -26,7 +30,7 @@
   #flow { padding: 24px 28px 60px; max-width: 1000px; margin: 0 auto; }
   .node { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
   .node h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
-  .node .body { font-size: 13px; color: var(--muted); white-space: pre-wrap; line-height: 1.5; }
+  .node .body { font-size: 13px; color: var(--muted); }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--queued); flex-shrink: 0; }
   .dot.running { background: var(--running); animation: pulse 1s infinite ease-in-out; }
   .dot.done { background: var(--done); }
@@ -70,7 +74,7 @@
   <div id="toFinal" class="connector hidden"></div>
   <div id="final" class="node hidden">
     <h3><span id="finalDot" class="dot"></span> Final Output</h3>
-    <div id="finalBody" class="body"></div>
+    <div id="finalBody" class="body md"></div>
   </div>
   <div id="shareBar" class="hidden">
     <button id="copyShareBtn">共有リンクをコピー</button>
@@ -78,7 +82,10 @@
   </div>
 </div>
 
+<script src="/render.js"></script>
 <script>
+mermaid.initialize({ startOnLoad: false, theme: "dark" });
+
 const form = document.getElementById("runForm");
 const goalInput = document.getElementById("goal");
 const runBtn = document.getElementById("runBtn");
@@ -139,7 +146,7 @@ function agentCard(task) {
   div.className = "node";
   div.id = `agent-${task.id}`;
   div.innerHTML = `<h3><span class="dot" id="dot-${task.id}"></span> ${escapeHtml(task.title)}</h3>
-                    <div class="body" id="body-${task.id}">待機中…</div>`;
+                    <div class="body md" id="body-${task.id}">待機中…</div>`;
   return div;
 }
 
@@ -163,7 +170,7 @@ function handle(e) {
       break;
     case "agent:done":
       document.getElementById(`dot-${e.id}`).className = "dot done";
-      document.getElementById(`body-${e.id}`).textContent = e.output;
+      renderMarkdownInto(document.getElementById(`body-${e.id}`), e.output);
       break;
     case "agent:error":
       document.getElementById(`dot-${e.id}`).className = "dot error";
@@ -177,7 +184,7 @@ function handle(e) {
       break;
     case "run:complete":
       finalDot.className = "dot done";
-      finalBody.textContent = e.final;
+      renderMarkdownInto(finalBody, e.final);
       statusEl.textContent = "完了";
       runBtn.disabled = false;
       mdDownload.href = `/api/runs/${e.runId}/markdown`;

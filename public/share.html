@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Research Report</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<link rel="stylesheet" href="/markdown.css">
 <style>
   :root {
     --bg: #0f1117; --panel: #171a23; --border: #2a2f3d; --text: #e6e8ef; --muted: #8890a4;
@@ -22,7 +26,7 @@
   #flow { padding: 24px 28px 60px; max-width: 1000px; margin: 0 auto; }
   .node { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
   .node h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
-  .node .body { font-size: 13px; color: var(--muted); white-space: pre-wrap; line-height: 1.6; }
+  .node .body { font-size: 13px; color: var(--muted); }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--done); flex-shrink: 0; }
 
   #agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 14px; }
@@ -56,12 +60,15 @@
     <div id="agents"></div>
     <div id="final" class="node">
       <h3><span class="dot"></span> Final Output</h3>
-      <div class="body" id="finalBody"></div>
+      <div class="body md" id="finalBody"></div>
     </div>
   </div>
 </div>
 
+<script src="/render.js"></script>
 <script>
+mermaid.initialize({ startOnLoad: false, theme: "dark" });
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -88,10 +95,11 @@ document.getElementById("copyBtn").addEventListener("click", async () => {
   for (const t of run.subtasks) {
     const div = document.createElement("div");
     div.className = "node";
-    div.innerHTML = `<h3><span class="dot"></span> ${escapeHtml(t.title)}</h3><div class="body">${escapeHtml(t.output)}</div>`;
+    div.innerHTML = `<h3><span class="dot"></span> ${escapeHtml(t.title)}</h3><div class="body md"></div>`;
     agentsEl.appendChild(div);
+    renderMarkdownInto(div.querySelector(".body"), t.output);
   }
-  document.getElementById("finalBody").textContent = run.final;
+  renderMarkdownInto(document.getElementById("finalBody"), run.final);
 
   document.getElementById("loading").style.display = "none";
   document.getElementById("content").style.display = "block";

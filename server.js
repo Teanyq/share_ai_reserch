@@ -85,7 +85,8 @@ async function runOrchestration(runId, goal) {
       broadcast({ type: "agent:start", runId, id: task.id, title: task.title });
       try {
         const output = await askClaude(
-          "You are a focused sub-agent. Complete only the given instructions concisely.",
+          "You are a focused sub-agent. Complete only the given instructions concisely. " +
+            "Format the answer as clean markdown: use headings, bullet/numbered lists, and a table when comparing items.",
           task.instructions
         );
         broadcast({ type: "agent:done", runId, id: task.id, output });
@@ -101,7 +102,11 @@ async function runOrchestration(runId, goal) {
   try {
     const summary = results.map((r) => `### ${r.title}\n${r.output}`).join("\n\n");
     const final = await askClaude(
-      "Combine the sub-agent results into one clear final answer for the user's original goal.",
+      "Combine the sub-agent results into one clear final answer for the user's original goal. " +
+        "Format as clean markdown: headings, bullet/numbered lists, and tables when comparing items. " +
+        "If the answer describes a process, sequence of steps, or decision flow, include one small " +
+        "```mermaid flowchart TD``` diagram to illustrate it — omit the diagram entirely if the content " +
+        "is not naturally a process/flow (e.g. a simple list or single recommendation).",
       `Goal: ${goal}\n\nSub-agent results:\n${summary}`
     );
     broadcast({ type: "run:complete", runId, final });
