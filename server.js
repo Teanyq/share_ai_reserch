@@ -15,7 +15,7 @@ const DATA_DIR = path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
 
 const app = express();
-app.set("trust proxy", 2); // Render: Cloudflare edge + Render's internal LB in front of the app (see /debug/ip)
+app.set("trust proxy", 3); // Render: 2 trusted hops in front of the app (Cloudflare edge + Render's internal LB) — confirmed empirically via /debug/ip, the 3rd hop back resolves to the true client IP
 app.use(express.json());
 // Without this, a malformed JSON body makes Express's default handler render a raw stack
 // trace (including this machine's filesystem paths) as the HTTP response.
