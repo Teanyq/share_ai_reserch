@@ -102,7 +102,8 @@ let ws;
 // a stuck "実行中…" screen — reconnect with backoff and, if a run is still in flight,
 // re-subscribe so live updates keep flowing.
 function connectWs() {
-  ws = new WebSocket(`ws://${location.host}`);
+  const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${wsProtocol}//${location.host}`);
   ws.addEventListener("message", (ev) => {
     const e = JSON.parse(ev.data);
     if (e.runId !== currentRunId) return;
