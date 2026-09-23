@@ -103,6 +103,12 @@ ws.addEventListener("message", (ev) => {
   handle(e);
 });
 
+function subscribe(runId) {
+  const send = () => ws.send(JSON.stringify({ type: "subscribe", runId }));
+  if (ws.readyState === WebSocket.OPEN) send();
+  else ws.addEventListener("open", send, { once: true });
+}
+
 function resetBoard() {
   orchDot.className = "dot running";
   orchBody.textContent = "サブタスクへ分割中…";
@@ -197,6 +203,7 @@ form.addEventListener("submit", async (ev) => {
     return;
   }
   currentRunId = data.runId;
+  subscribe(currentRunId);
   statusEl.textContent = "実行中…";
 });
 </script>

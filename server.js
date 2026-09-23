@@ -4,7 +4,7 @@ import path from "node:path";
 import express from "express";
 import { WebSocketServer } from "ws";
 import Anthropic from "@anthropic-ai/sdk";
-import { extractJson, toMarkdown, createRateLimiter, UUID_RE } from "./lib.js";
+import { extractJson, normalizeSubtasks, toMarkdown, createRateLimiter, UUID_RE } from "./lib.js";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
 
@@ -15,6 +15,7 @@ const DATA_DIR = path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
 
 const app = express();
+app.set("trust proxy", 1); // adjust hop count to match the actual reverse proxy at deploy time
 app.use(express.json());
 app.use(express.static("public"));
 
@@ -23,14 +24,29 @@ const server = app.listen(process.env.PORT || 3300, () =>
 );
 
 const wss = new WebSocketServer({ server });
+wss.on("error", () => {});
 const clients = new Set();
 wss.on("connection", (ws) => {
+  ws.subscribedRunIds = new Set();
   clients.add(ws);
   ws.on("close", () => clients.delete(ws));
+  ws.on("error", () => clients.delete(ws));
+  ws.on("message", (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.type === "subscribe" && typeof msg.runId === "string") ws.subscribedRunIds.add(msg.runId);
+    } catch {
+      // ignore malformed client messages
+    }
+  });
 });
+// Only clients that explicitly subscribed to this runId receive it — otherwise every
+// visitor's browser would see every other visitor's goal and results in real time.
 function broadcast(event) {
   const msg = JSON.stringify(event);
-  for (const ws of clients) if (ws.readyState === 1) ws.send(msg);
+  for (const ws of clients) {
+    if (ws.readyState === 1 && ws.subscribedRunIds.has(event.runId)) ws.send(msg);
+  }
 }
 
 async function askClaude(system, prompt) {
@@ -56,7 +72,7 @@ async function runOrchestration(runId, goal) {
         'Respond with ONLY a JSON array like [{"id":"a1","title":"...","instructions":"..."}]. No prose.',
       goal
     );
-    subtasks = extractJson(planRaw);
+    subtasks = normalizeSubtasks(extractJson(planRaw));
   } catch (err) {
     broadcast({ type: "run:error", runId, message: `Planning failed: ${err.message}` });
     return;
@@ -132,7 +148,7 @@ app.post("/api/run", (req, res) => {
   if (!checkRateLimit(req.ip)) {
     return res.status(429).json({ error: `1時間あたり${RATE_LIMIT.max}回までです。しばらくしてから再度お試しください` });
   }
-  const goal = (req.body.goal || "").trim();
+  const goal = typeof req.body.goal === "string" ? req.body.goal.trim() : "";
   if (!goal) return res.status(400).json({ error: "goal is required" });
   if (goal.length > 500) return res.status(400).json({ error: "goal must be 500 characters or fewer" });
 

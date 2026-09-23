@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractJson, toMarkdown, createRateLimiter, UUID_RE } from "./lib.js";
+import { extractJson, normalizeSubtasks, toMarkdown, createRateLimiter, UUID_RE } from "./lib.js";
 
 test("extractJson pulls a JSON array out of surrounding prose", () => {
   const raw = 'Sure, here you go:\n[{"id":"a1","title":"x"}]\nhope that helps';
@@ -9,6 +9,38 @@ test("extractJson pulls a JSON array out of surrounding prose", () => {
 
 test("extractJson parses a bare JSON array", () => {
   assert.deepEqual(extractJson('[{"id":"a1"}]'), [{ id: "a1" }]);
+});
+
+test("extractJson unwraps a fenced ```json code block", () => {
+  const raw = '```json\n[{"id":"a1"}]\n```';
+  assert.deepEqual(extractJson(raw), [{ id: "a1" }]);
+});
+
+test("extractJson does not get fooled by an earlier unrelated bracket pair", () => {
+  const raw = 'Use the format like [x, y] below:\n[{"id":"a1"}]';
+  assert.deepEqual(extractJson(raw), [{ id: "a1" }]);
+});
+
+test("normalizeSubtasks caps fan-out at 5 and assigns fresh sequential ids", () => {
+  const raw = Array.from({ length: 8 }, (_, i) => ({ id: "dup", title: `T${i}`, instructions: `do ${i}` }));
+  const result = normalizeSubtasks(raw);
+  assert.equal(result.length, 5);
+  assert.deepEqual(result.map((t) => t.id), ["t0", "t1", "t2", "t3", "t4"]);
+});
+
+test("normalizeSubtasks rejects a non-array or empty plan", () => {
+  assert.throws(() => normalizeSubtasks([]));
+  assert.throws(() => normalizeSubtasks("not an array"));
+  assert.throws(() => normalizeSubtasks(null));
+});
+
+test("normalizeSubtasks rejects a subtask with no instructions", () => {
+  assert.throws(() => normalizeSubtasks([{ title: "x" }]));
+});
+
+test("normalizeSubtasks falls back to a default title when missing", () => {
+  const result = normalizeSubtasks([{ instructions: "do it" }]);
+  assert.equal(result[0].title, "Subtask 1");
 });
 
 test("toMarkdown renders goal, subtasks and final output", () => {
