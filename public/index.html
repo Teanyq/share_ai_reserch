@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI Orchestration Dashboard</title>
 <style>
   :root {
@@ -95,13 +96,24 @@ const copyShareBtn = document.getElementById("copyShareBtn");
 const mdDownload = document.getElementById("mdDownload");
 
 let currentRunId = null;
+let ws;
 
-const ws = new WebSocket(`ws://${location.host}`);
-ws.addEventListener("message", (ev) => {
-  const e = JSON.parse(ev.data);
-  if (e.runId !== currentRunId) return;
-  handle(e);
-});
+// A dropped connection (server restart, brief network blip) shouldn't strand the user on
+// a stuck "実行中…" screen — reconnect with backoff and, if a run is still in flight,
+// re-subscribe so live updates keep flowing.
+function connectWs() {
+  ws = new WebSocket(`ws://${location.host}`);
+  ws.addEventListener("message", (ev) => {
+    const e = JSON.parse(ev.data);
+    if (e.runId !== currentRunId) return;
+    handle(e);
+  });
+  ws.addEventListener("open", () => {
+    if (currentRunId && runBtn.disabled) subscribe(currentRunId);
+  });
+  ws.addEventListener("close", () => setTimeout(connectWs, 2000));
+}
+connectWs();
 
 function subscribe(runId) {
   const send = () => ws.send(JSON.stringify({ type: "subscribe", runId }));

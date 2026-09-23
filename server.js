@@ -9,7 +9,7 @@ import { extractJson, normalizeSubtasks, toMarkdown, createRateLimiter, UUID_RE 
 if (existsSync(".env")) process.loadEnvFile(".env");
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-5";
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 5 });
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 3 });
 
 const DATA_DIR = path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
