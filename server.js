@@ -25,6 +25,11 @@ app.use((err, req, res, next) => {
 });
 app.use(express.static("public"));
 
+// TEMPORARY diagnostic — remove once trust-proxy hop count is confirmed against real Render traffic.
+app.get("/debug/ip", (req, res) => {
+  res.json({ reqIp: req.ip, xForwardedFor: req.headers["x-forwarded-for"], remoteAddress: req.socket.remoteAddress });
+});
+
 const server = app.listen(process.env.PORT || 3300, () =>
   console.log(`AI orchestration dashboard: http://localhost:${server.address().port}`)
 );
