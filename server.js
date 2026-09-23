@@ -4,11 +4,12 @@ import path from "node:path";
 import express from "express";
 import { WebSocketServer } from "ws";
 import Anthropic from "@anthropic-ai/sdk";
+import { extractJson, toMarkdown, createRateLimiter, UUID_RE } from "./lib.js";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-5";
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 5 });
 
 const DATA_DIR = path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -42,10 +43,8 @@ async function askClaude(system, prompt) {
   return res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
 }
 
-function extractJson(text) {
-  const match = text.match(/\[[\s\S]*\]/);
-  return JSON.parse(match ? match[0] : text);
-}
+const RATE_LIMIT = { windowMs: 60 * 60 * 1000, max: 10 };
+const checkRateLimit = createRateLimiter(RATE_LIMIT);
 
 async function runOrchestration(runId, goal) {
   broadcast({ type: "run:start", runId, goal });
@@ -105,13 +104,6 @@ function loadRun(runId) {
   return JSON.parse(readFileSync(file, "utf8"));
 }
 
-function toMarkdown(run) {
-  const sections = run.subtasks.map((t) => `### ${t.title}\n\n${t.output}`).join("\n\n");
-  return `# ${run.goal}\n\n_${run.completedAt}_\n\n${sections}\n\n## Final Output\n\n${run.final}\n`;
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 app.get("/api/runs/:id", (req, res) => {
   if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: "invalid id" });
   const run = loadRun(req.params.id);
@@ -137,8 +129,12 @@ app.post("/api/run", (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) {
     return res.status(400).json({ error: "ANTHROPIC_API_KEY is not set (create a .env file)" });
   }
+  if (!checkRateLimit(req.ip)) {
+    return res.status(429).json({ error: `1時間あたり${RATE_LIMIT.max}回までです。しばらくしてから再度お試しください` });
+  }
   const goal = (req.body.goal || "").trim();
   if (!goal) return res.status(400).json({ error: "goal is required" });
+  if (goal.length > 500) return res.status(400).json({ error: "goal must be 500 characters or fewer" });
 
   const runId = randomUUID();
   res.json({ runId });
