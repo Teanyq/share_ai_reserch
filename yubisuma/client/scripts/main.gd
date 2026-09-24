@@ -7,6 +7,8 @@ extends Control
 const SETTINGS_PATH := "user://settings.cfg"
 const DEFAULT_SERVER := "ws://localhost:8787/ws"
 const EMOTES := ["よろしく！", "読めてるよ", "ゼロでしょ？", "せーの！", "ナイス！", "あぶなっ", "そこかー", "GG"]
+const FONT_MEDIUM := preload("res://fonts/MPLUSRounded1c-Medium.ttf")
+const FONT_BOLD := preload("res://fonts/MPLUSRounded1c-Bold.ttf")
 const MODE_NAMES := {"private": "プライベート", "casual": "カジュアル", "ranked": "ランク", "practice": "CPU練習"}
 
 var net: Net
@@ -28,6 +30,8 @@ var autoplay_started_ms := 0
 var guest := false  # --guest：保存済みトークンを使わず別プレイヤーとして入る（同じ PC で 2 つ起動するとき用）
 var shot_dir := ""  # --shot=<dir> で各場面のスクリーンショットを保存
 var shots_taken := {}
+var invite_code := ""  # Web 版で ?room=XXXXXX 付きの URL から開いたとき自動で参加する
+var is_web := OS.has_feature("web")
 
 # 画面
 var title_screen: Control
@@ -49,6 +53,8 @@ var queue_label: Label
 
 # ロビー
 var lobby_code: Label
+var lobby_invite: Button
+var lobby_invite_url := ""
 var lobby_players: VBoxContainer
 var lobby_start: Button
 var lobby_addcpu: Button
@@ -108,6 +114,19 @@ func _ready() -> void:
 			shot_dir = arg.get_slice("=", 1)
 		elif arg.begins_with("--server="):
 			server_url = arg.get_slice("=", 1)
+	if is_web:
+		# Web 版は配信元と同じサーバに繋ぐ。URL パラメータで自動プレイ・招待コードを受け取る
+		server_url = str(JavaScriptBridge.eval("(location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'"))
+		var q := func(key: String) -> String:
+			var v = JavaScriptBridge.eval("new URLSearchParams(location.search).get('%s') || ''" % key)
+			return str(v) if v != null else ""
+		invite_code = q.call("room").to_upper()
+		if q.call("autoplay") != "":
+			autoplay = q.call("autoplay")
+			autoplay_started_ms = Time.get_ticks_msec()
+		guest = q.call("guest") != ""
+		server_edit.editable = false
+		code_edit.text = invite_code
 	server_edit.text = server_url
 
 	net = Net.new()
@@ -159,6 +178,9 @@ func _on_message(msg: Dictionary) -> void:
 			_update_profile(msg.get("profile", {}))
 			if autoplay != "" and state.is_empty():
 				_autoplay_begin()
+			elif invite_code != "" and state.is_empty():
+				net.send({"type": "room.join", "code": invite_code})
+				invite_code = ""
 		"profile":
 			_update_profile(msg.get("profile", {}))
 		"kicked":
@@ -232,6 +254,10 @@ func _apply_state(type: String, s: Dictionary) -> void:
 func _render_lobby() -> void:
 	var is_host := str(state.get("hostId")) == my_id
 	lobby_code.text = "ルームコード：%s" % state.get("code", "")
+	lobby_invite.visible = is_web
+	if is_web:
+		lobby_invite_url = "%s?room=%s" % [str(JavaScriptBridge.eval("location.origin + location.pathname")), state.get("code", "")]
+		lobby_invite.text = "招待 URL をコピー"
 	for c in lobby_players.get_children():
 		c.queue_free()
 	for p in state.get("players", []):
@@ -270,7 +296,7 @@ func _render_game() -> void:
 	if int(s.get("settings", {}).get("winsNeeded", 1)) > 1:
 		wins_text = " ｜ %d 本先取" % int(s.get("settings", {}).get("winsNeeded", 1))
 	top_label.text = "%s ｜ ゲーム %d%s ｜ ラウンド %d%s" % [
-		mode_name, int(s.get("gameNo", 1)), wins_text, int(s.get("round", 0)), "  ⚡サドンデス（当てると2本減る）" if s.get("suddenDeath") else ""]
+		mode_name, int(s.get("gameNo", 1)), wins_text, int(s.get("round", 0)), "  【サドンデス：当てると2本減る】" if s.get("suddenDeath") else ""]
 
 	# プレイヤー表示（メンバーが変わったら作り直す）
 	var ids := players.map(func(p): return str(p.get("id")))
@@ -528,7 +554,7 @@ func _autoplay_lobby() -> void:
 
 
 func _autoplay_step(type: String) -> void:
-	if type == "round.input" and str(state.get("callerId")) == my_id and not shots_taken.has("input"):
+	if type == "round.input" and shot_dir != "" and str(state.get("callerId")) == my_id and not shots_taken.has("input"):
 		_toggle_thumb(false)
 		_choose_call(2)
 		_shot("input")
@@ -664,7 +690,13 @@ func _build_lobby() -> void:
 	lobby_code = _label("", 40)
 	lobby_code.add_theme_color_override("font_color", Color("ffd166"))
 	box.add_child(lobby_code)
-	box.add_child(_label("このコードをフレンドに伝えて参加してもらおう", 18))
+	var hint := _hbox(12)
+	hint.add_child(_label("このコードをフレンドに伝えて参加してもらおう", 18))
+	lobby_invite = _button("招待 URL をコピー", func():
+		DisplayServer.clipboard_set(lobby_invite_url)
+		lobby_invite.text = "コピーしました！")
+	hint.add_child(lobby_invite)
+	box.add_child(hint)
 	var cols := _hbox(40)
 	box.add_child(cols)
 
@@ -818,7 +850,10 @@ func _make_theme() -> Theme:
 	var t := Theme.new()
 	var font := SystemFont.new()
 	font.font_names = PackedStringArray(["Yu Gothic UI", "Meiryo", "Hiragino Sans", "Noto Sans CJK JP", "Noto Sans JP", "IPAGothic", "sans-serif"])
-	t.default_font = font
+	# 同梱フォント（Web 版には OS フォントがないため必須）。足りない字は OS フォントで補う
+	var bundled: FontFile = FONT_MEDIUM
+	bundled.fallbacks = [font]
+	t.default_font = bundled
 	t.default_font_size = 20
 	return t
 
@@ -844,6 +879,8 @@ func _label(text: String, font_size := 20) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", font_size)
+	if font_size >= 28:
+		l.add_theme_font_override("font", FONT_BOLD)
 	return l
 
 

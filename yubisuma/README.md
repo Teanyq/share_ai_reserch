@@ -4,7 +4,7 @@
 現在は **プロトタイプ（M0〜M1 相当）** の段階です。
 
 - `server/` … ゲームサーバ（Node.js + TypeScript + WebSocket）
-- `client/` … ゲームクライアント（Godot 4.4）
+- `client/` … ゲームクライアント（Godot 4.4）。Web 版の書き出し結果は `server/public/`
 - `docs/` … 設計ドキュメント
 
 ## プロトタイプの動かし方
@@ -30,11 +30,42 @@ npm start          # 本番と同じテンポ
 
 操作：`F` 左の親指 / `J` 右の親指 / 数字キー コール（マウスでも可）
 
-### 友達とネット越しに遊ぶ
+### 友達とネット越しに遊ぶ（Web 版を公開）
 
-サーバを外部から見える場所で動かし、クライアントの「サーバ」欄を書き換えます（例：`wss://example.onrender.com/ws`）。
-Render なら Root Directory を `yubisuma/server`、Build Command を `npm install`、Start Command を `npm start` にすれば動きます
-（無料プランはディスクが消えるので、再起動でレートがリセットされます）。
+サーバは Godot の **Web 版クライアントも一緒に配信** します。公開すれば、友達は URL を開くだけでブラウザから遊べます（Godot のインストール不要）。
+
+**Render（無料）で公開する手順**
+
+1. https://dashboard.render.com で **New → Web Service** を選び、GitHub の `teanyq/share_ai_reserch` を選ぶ
+2. 次のように設定して **Deploy** を押す
+
+   | 項目 | 値 |
+   | --- | --- |
+   | Branch | `claude/exciting-shannon-bj9xlz`（main にマージした後は `main`） |
+   | Region | Singapore（日本に一番近い） |
+   | Root Directory | `yubisuma/server` |
+   | Runtime / Build Command / Start Command | Node / `npm install` / `npm start` |
+   | Instance Type | Free |
+   | Health Check Path（Advanced） | `/healthz` |
+   | Environment Variables | `NODE_VERSION` = `22.22.0` |
+
+   （Blueprint を使う場合は New → Blueprint で Blueprint Path に `yubisuma/render.yaml` を指定しても同じ設定になります）
+3. 数分で `https://〇〇.onrender.com` が発行されるので、その URL を友達に送る
+4. プライベートマッチは、ルームを作ったあと「招待 URL をコピー」で送れば、開くだけで同じルームに入れる
+
+無料プランの注意：
+- 15 分アクセスがないとスリープし、次に開いたとき起動に 1 分ほどかかる
+- ディスクが保存されないので、再デプロイや再起動でレートがリセットされる
+
+デスクトップ版（Godot から実行）で公開サーバに繋ぐときは、「サーバ」欄を `wss://〇〇.onrender.com/ws` にします。
+
+**Web 版を作り直す**（クライアントを変更したとき）
+
+```bash
+GODOT=/path/to/godot ./yubisuma/client/export_web.sh   # server/public/ に書き出し → commit & push
+```
+
+事前に Godot エディタの「エディタ → エクスポートテンプレートの管理」でテンプレート（4.4.1）を入れておく必要があります。
 
 ### テスト
 
@@ -59,7 +90,7 @@ godot --headless --path yubisuma/client -- --autoplay=practice   # practice / ca
 | カジュアルの内部レート | なし | OpenSkill |
 | シーズン・降格保護・ペナルティ段階 | なし | 02 参照 |
 | 絵・音 | コードで描いた仮の手、音なし | 外注 or 自作 |
-| フォント | OS の日本語フォントを使用 | Noto Sans JP 等を同梱 |
+| フォント | M PLUS Rounded 1c を同梱（OFL） | 本番フォントは要検討 |
 
 > このリポジトリ（share_ai_reserch）とは別プロジェクトです。実装フェーズに入るときは
 > 専用リポジトリへ切り出すことを推奨します。

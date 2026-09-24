@@ -1,0 +1,14 @@
+# Render の Blueprint 定義（Blueprint Path に yubisuma/render.yaml を指定して使う）
+services:
+  - type: web
+    name: yubisuma
+    runtime: node
+    plan: free
+    region: singapore # Render で日本に一番近いリージョン
+    rootDir: yubisuma/server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 22.22.0

@@ -1,18 +1,22 @@
-// エントリポイント：HTTP（ヘルスチェック）+ WebSocket(/ws)
+// エントリポイント：HTTP（Web 版クライアントの配信・ヘルスチェック）+ WebSocket(/ws)
 
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { Hub, type HubOptions } from "./hub.ts";
+import { serveStatic } from "./static.ts";
 
 export const PROTOCOL_VERSION = 1;
 
-export function startServer(port: number, hubOpts: HubOptions = {}) {
+const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
+
+export function startServer(port: number, hubOpts: HubOptions = {}, publicDir = PUBLIC_DIR) {
   const hub = new Hub(hubOpts);
   const httpServer = http.createServer((req, res) => {
-    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-    res.end(`yubisuma server ok (protocol v${PROTOCOL_VERSION})\n`);
+    if (req.url !== "/healthz" && serveStatic(publicDir, req, res)) return;
+    res.writeHead(req.url === "/healthz" ? 200 : 404, { "content-type": "text/plain; charset=utf-8" });
+    res.end(req.url === "/healthz" ? `yubisuma server ok (protocol v${PROTOCOL_VERSION})\n` : "not found\n");
   });
   const wss = new WebSocketServer({ server: httpServer, path: "/ws", maxPayload: 4 * 1024 });
   const alive = new WeakMap<WebSocket, boolean>();
