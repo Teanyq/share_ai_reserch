@@ -9,6 +9,9 @@ const DEFAULT_SERVER := "ws://localhost:8787/ws"
 const EMOTES := ["よろしく！", "読めてるよ", "ゼロでしょ？", "せーの！", "ナイス！", "あぶなっ", "そこかー", "GG"]
 const FONT_MEDIUM := preload("res://fonts/MPLUSRounded1c-Medium.ttf")
 const FONT_BOLD := preload("res://fonts/MPLUSRounded1c-Bold.ttf")
+const CHALK := Color("f4f1e6")
+const CHALK_YELLOW := Color("ffe27a")
+const INK := Color("4a3222")
 const MODE_NAMES := {"private": "プライベート", "casual": "カジュアル", "ranked": "ランク", "practice": "CPU練習"}
 
 var net: Net
@@ -69,8 +72,8 @@ var top_label: Label
 var timer_bar: ProgressBar
 var timer_label: Label
 var phase_label: Label
-var players_box: HBoxContainer
-var player_views := {}  # id -> {name, hand, info, bubble, bubble_until}
+var table: TableView
+var table_ids: Array = []
 var left_btn: Button
 var right_btn: Button
 var call_box: HBoxContainer
@@ -84,8 +87,7 @@ var toast_until := 0
 
 func _ready() -> void:
 	theme = _make_theme()
-	var bg := ColorRect.new()
-	bg.color = Color("1d1f2b")
+	var bg := ClassroomView.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
@@ -202,9 +204,9 @@ func _on_message(msg: Dictionary) -> void:
 			_show(title_screen)
 			net.send({"type": "profile.get"})
 		"round.activity":
-			var v = player_views.get(str(msg.get("playerId")))
-			if v != null:
-				v.hand.twitch()
+			var seat = table.seats.get(str(msg.get("playerId")))
+			if seat != null:
+				seat.hand.twitch()
 		"emote":
 			_show_emote(str(msg.get("playerId")), int(msg.get("emoteId", 0)))
 		_:
@@ -298,41 +300,53 @@ func _render_game() -> void:
 	top_label.text = "%s ｜ ゲーム %d%s ｜ ラウンド %d%s" % [
 		mode_name, int(s.get("gameNo", 1)), wins_text, int(s.get("round", 0)), "  【サドンデス：当てると2本減る】" if s.get("suddenDeath") else ""]
 
-	# プレイヤー表示（メンバーが変わったら作り直す）
+	# 机を囲む席（メンバーが変わったら作り直す）
 	var ids := players.map(func(p): return str(p.get("id")))
-	if ids != player_views.keys():
-		_rebuild_player_views(players)
+	if ids != table_ids:
+		table_ids = ids
+		table.setup(ids, my_id)
 	var show_reveal := phase in ["reveal", "gameEnd", "matchEnd"] and reveal is Dictionary
+	var calling := phase in ["announce", "input", "reveal"]
 	for p in players:
 		var id := str(p.get("id"))
-		var v: Dictionary = player_views[id]
+		var hand: HandView = table.seats[id].hand
 		var hands = p.get("hands")
-		v.hand.hands = int(hands) if hands != null else 0
-		v.hand.highlight = id == caller_id and phase in ["announce", "input", "reveal"]
+		hand.hands = int(hands) if hands != null else 0
 		if show_reveal and reveal.get("thumbs", {}).has(id):
-			v.hand.thumbs_up = int(reveal.get("thumbs")[id])
+			hand.thumbs_up = int(reveal.get("thumbs")[id])
 		elif id == my_id and phase in ["announce", "input"]:
-			v.hand.thumbs_up = _my_thumbs()
+			hand.thumbs_up = _my_thumbs()
 		else:
-			v.hand.thumbs_up = -1
-		var tags := []
+			hand.thumbs_up = -1
+		var marks := []
 		if id == my_id:
-			tags.append("あなた")
+			marks.append("あなた")
 		if p.get("isCpu"):
-			tags.append("CPU")
+			marks.append("CPU")
 		if not p.get("connected"):
-			tags.append("切断中")
-		v.name.text = "%s%s" % [p.get("name"), " [%s]" % "/".join(tags) if tags.size() > 0 else ""]
-		var info := ""
-		if id == caller_id and phase in ["announce", "input"]:
-			info += "★コール中  "
+			marks.append("切断中")
+		var line1 := "%s%s" % [p.get("name"), "（%s）" % "・".join(marks) if marks.size() > 0 else ""]
+		var line2 := "★".repeat(int(p.get("wins", 0))) if int(p.get("wins", 0)) > 0 else "☆"
 		if p.get("placed") != null:
-			info += "%d 位  " % int(p.get("placed"))
-		info += "勝 %d" % int(p.get("wins", 0))
+			line2 += "  %d 位" % int(p.get("placed"))
+		if id == caller_id and calling:
+			line2 += "  コール！"
+		table.set_tag(id, line1 + "\n" + line2, id == caller_id and calling)
 		var hist: Array = p.get("history", [])
-		if hist.size() > 0:
-			info += "\n履歴: " + " ".join(hist.map(func(n): return str(int(n))))
-		v.info.text = info
+		table.set_note(id, "さいきん " + " ".join(hist.map(func(n): return str(int(n)))) if hist.size() > 0 else "")
+	table.caller_id = caller_id if calling else ""
+	match phase:
+		"announce", "input":
+			table.center_small = "%s のコール" % ("あなた" if caller_id == my_id else _name_of(caller_id))
+			table.center_big = str(my_call) if caller_id == my_id and my_call >= 0 else "？"
+		"reveal":
+			if reveal is Dictionary:
+				table.center_small = "合計 %d … %s" % [int(reveal.get("total", 0)), "あたり！" if reveal.get("hit") else "はずれ"]
+				table.center_big = str(int(reveal.get("call"))) if reveal.get("call") != null else "―"
+		_:
+			table.center_small = ""
+			table.center_big = ""
+	table.refresh()
 
 	# 中央メッセージ
 	var caller_name := _name_of(caller_id)
@@ -341,9 +355,9 @@ func _render_game() -> void:
 			phase_label.text = "あなたのコール！" if caller_id == my_id else "%s のコール！" % caller_name
 		"input":
 			if caller_id == my_id:
-				phase_label.text = "数字と指を決めて！（F / J で指、数字キーでコール）"
+				phase_label.text = "数字と指を決めて！（A / D で指、数字キーでコール）"
 			else:
-				phase_label.text = "%s のコール … 指を決めて！（F / J）" % caller_name
+				phase_label.text = "%s のコール … 指を決めて！（A / D）" % caller_name
 		"reveal":
 			phase_label.text = _reveal_text(reveal)
 		"gameEnd":
@@ -359,8 +373,8 @@ func _render_game() -> void:
 	right_btn.visible = my_hands >= 2
 	left_btn.disabled = not can_input
 	right_btn.disabled = not can_input
-	left_btn.text = "左の親指 [F]\n%s" % ("▲ 上げる" if my_left_up else "▽ 下げる")
-	right_btn.text = "右の親指 [J]\n%s" % ("▲ 上げる" if my_right_up else "▽ 下げる")
+	left_btn.text = "左の親指 [A]\n%s" % ("▲ 上げる" if my_left_up else "▽ 下げる")
+	right_btn.text = "右の親指 [D]\n%s" % ("▲ 上げる" if my_right_up else "▽ 下げる")
 	var i_am_caller := caller_id == my_id and phase in ["announce", "input"]
 	call_title.visible = i_am_caller
 	call_box.visible = i_am_caller
@@ -427,37 +441,10 @@ func _render_result() -> void:
 	again_btn.visible = mode == "practice" or (mode == "private" and str(state.get("hostId")) == my_id)
 
 
-func _rebuild_player_views(players: Array) -> void:
-	for c in players_box.get_children():
-		c.queue_free()
-	player_views.clear()
-	for p in players:
-		var panel := PanelContainer.new()
-		panel.custom_minimum_size = Vector2(240, 230)
-		panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		var box := _vbox(4)
-		panel.add_child(box)
-		var bubble := _label("", 20)
-		bubble.add_theme_color_override("font_color", Color("ffd166"))
-		bubble.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		var name_label := _label("", 20)
-		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		var hand := HandView.new()
-		hand.custom_minimum_size = Vector2(220, 120)
-		var info := _label("", 16)
-		info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		for c in [bubble, name_label, hand, info]:
-			box.add_child(c)
-		players_box.add_child(panel)
-		player_views[str(p.get("id"))] = {"name": name_label, "hand": hand, "info": info, "bubble": bubble, "bubble_until": 0}
-
-
 func _show_emote(pid: String, emote_id: int) -> void:
-	var v = player_views.get(pid)
-	if v == null or emote_id < 0 or emote_id >= EMOTES.size():
+	if emote_id < 0 or emote_id >= EMOTES.size():
 		return
-	v.bubble.text = "「%s」" % EMOTES[emote_id]
-	v.bubble_until = Time.get_ticks_msec() + 2500
+	table.show_bubble(pid, "「%s」" % EMOTES[emote_id])
 
 
 # ───────── 入力 ─────────
@@ -495,9 +482,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not game_screen.visible or k == null or not k.pressed or k.echo:
 		return
 	var key := k.keycode
-	if key == KEY_F:
+	if key == KEY_A:
 		_toggle_thumb(false)
-	elif key == KEY_J:
+	elif key == KEY_D:
 		_toggle_thumb(true)
 	elif key >= KEY_0 and key <= KEY_9:
 		_choose_call(key - KEY_0)
@@ -514,11 +501,7 @@ func _process(_delta: float) -> void:
 		timer_label.visible = phase == "input"
 		timer_bar.value = 100.0 * left / phase_total_ms
 		timer_label.text = "%.1f 秒" % (left / 1000.0)
-		timer_label.add_theme_color_override("font_color", Color("ff5c5c") if left < 1000 else Color.WHITE)
-		for v in player_views.values():
-			if v.bubble_until > 0 and now > v.bubble_until:
-				v.bubble.text = ""
-				v.bubble_until = 0
+		timer_label.add_theme_color_override("font_color", Color("ff8f8f") if left < 1000 else CHALK)
 	if toast_until > 0 and now > toast_until:
 		toast_label.text = ""
 		toast_until = 0
@@ -595,14 +578,12 @@ func _shot(tag: String) -> void:
 
 func _build_title() -> void:
 	title_screen = _screen()
-	var box := _vbox(14)
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	title_screen.add_child(box)
+	var box := _board(title_screen, 14)
 	var title := _label("YUBISUMA ONLINE", 56)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_color_override("font_color", Color("ff8a5c"))
+	title.add_theme_color_override("font_color", CHALK_YELLOW)
 	box.add_child(title)
-	var sub := _label("オンライン指スマ（プロトタイプ）", 22)
+	var sub := _label("〜 放課後の教室で、いっせーので！ 〜", 22)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(sub)
 
@@ -672,9 +653,7 @@ func _on_practice() -> void:
 
 func _build_queue() -> void:
 	queue_screen = _screen()
-	var box := _vbox(20)
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	queue_screen.add_child(box)
+	var box := _board(queue_screen, 20)
 	queue_label = _label("マッチング中…", 32)
 	queue_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(queue_label)
@@ -685,10 +664,9 @@ func _build_queue() -> void:
 
 func _build_lobby() -> void:
 	lobby_screen = _screen()
-	var box := _vbox(14)
-	lobby_screen.add_child(box)
+	var box := _board(lobby_screen, 14)
 	lobby_code = _label("", 40)
-	lobby_code.add_theme_color_override("font_color", Color("ffd166"))
+	lobby_code.add_theme_color_override("font_color", CHALK_YELLOW)
 	box.add_child(lobby_code)
 	var hint := _hbox(12)
 	hint.add_child(_label("このコードをフレンドに伝えて参加してもらおう", 18))
@@ -746,92 +724,124 @@ func _push_settings() -> void:
 
 
 func _build_game() -> void:
-	game_screen = _screen()
-	var box := _vbox(10)
-	game_screen.add_child(box)
+	game_screen = Control.new()
+	game_screen.set_anchors_preset(Control.PRESET_FULL_RECT)
+	game_screen.visible = false
+	add_child(game_screen)
 
-	var top := _hbox(16)
-	top_label = _label("", 18)
-	top_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	top.add_child(top_label)
-	top.add_child(_button("退出", func(): _send_action({"type": "room.leave"})))
-	box.add_child(top)
+	# 机の島
+	table = TableView.new()
+	table.set_anchors_preset(Control.PRESET_FULL_RECT)
+	table.offset_top = 168
+	table.offset_bottom = -122
+	game_screen.add_child(table)
 
-	var timer_row := _hbox(12)
-	timer_bar = ProgressBar.new()
-	timer_bar.show_percentage = false
-	timer_bar.custom_minimum_size.y = 18
-	timer_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	timer_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	timer_row.add_child(timer_bar)
-	timer_label = _label("", 24)
-	timer_label.custom_minimum_size.x = 100
-	timer_row.add_child(timer_label)
-	box.add_child(timer_row)
-
+	# 黒板（進行・タイマー）
+	var board := PanelContainer.new()
+	board.anchor_left = 0.5
+	board.anchor_right = 0.5
+	board.offset_left = -470
+	board.offset_right = 470
+	board.offset_top = 6
+	board.offset_bottom = 160
+	board.add_theme_stylebox_override("panel", _chalkboard_style(18))
+	game_screen.add_child(board)
+	var bbox := _vbox(2)
+	board.add_child(bbox)
+	top_label = _label("", 16)
+	top_label.modulate = Color(1, 1, 1, 0.8)
+	bbox.add_child(top_label)
 	phase_label = _label("", 30)
 	phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	phase_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	box.add_child(phase_label)
+	phase_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	phase_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	bbox.add_child(phase_label)
+	var timer_row := _hbox(12)
+	timer_bar = ProgressBar.new()
+	timer_bar.show_percentage = false
+	timer_bar.custom_minimum_size.y = 14
+	timer_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	timer_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	timer_row.add_child(timer_bar)
+	timer_label = _label("", 22)
+	timer_label.custom_minimum_size.x = 90
+	timer_row.add_child(timer_label)
+	bbox.add_child(timer_row)
 
-	players_box = _hbox(16)
-	players_box.alignment = BoxContainer.ALIGNMENT_CENTER
-	players_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	box.add_child(players_box)
+	var exit_btn := _button("退出", func(): _send_action({"type": "room.leave"}))
+	exit_btn.anchor_left = 1.0
+	exit_btn.anchor_right = 1.0
+	exit_btn.offset_left = -96
+	exit_btn.offset_right = -16
+	exit_btn.offset_top = 16
+	exit_btn.offset_bottom = 56
+	game_screen.add_child(exit_btn)
 
-	var controls := _hbox(24)
+	# 手元の操作（床の上）
+	var bottom := _vbox(8)
+	bottom.anchor_top = 1.0
+	bottom.anchor_bottom = 1.0
+	bottom.anchor_right = 1.0
+	bottom.offset_top = -118
+	bottom.offset_bottom = -8
+	game_screen.add_child(bottom)
+	var controls := _hbox(20)
 	controls.alignment = BoxContainer.ALIGNMENT_CENTER
 	left_btn = _button("", func(): _toggle_thumb(false))
 	right_btn = _button("", func(): _toggle_thumb(true))
 	for b in [left_btn, right_btn]:
-		b.custom_minimum_size = Vector2(180, 80)
+		b.custom_minimum_size = Vector2(170, 68)
 		b.focus_mode = Control.FOCUS_NONE
 		controls.add_child(b)
-	var call_col := _vbox(4)
-	call_title = _label("", 18)
+	var call_col := _vbox(2)
+	call_title = _label("", 17)
+	call_title.add_theme_constant_override("outline_size", 6)
+	call_title.add_theme_color_override("font_outline_color", Color("4a2e16"))
 	call_col.add_child(call_title)
 	call_box = _hbox(6)
 	call_col.add_child(call_box)
 	controls.add_child(call_col)
-	box.add_child(controls)
+	bottom.add_child(controls)
 
 	var emotes := _hbox(6)
 	emotes.alignment = BoxContainer.ALIGNMENT_CENTER
 	for i in EMOTES.size():
 		var idx := i
 		var b := _button(EMOTES[i], func(): net.send({"type": "emote", "id": idx}))
-		b.add_theme_font_size_override("font_size", 15)
+		b.add_theme_font_size_override("font_size", 14)
 		b.focus_mode = Control.FOCUS_NONE
 		emotes.add_child(b)
-	box.add_child(emotes)
+	bottom.add_child(emotes)
 
-	var fill := StyleBoxFlat.new()
-	fill.bg_color = Color("ff8a5c")
-	fill.set_corner_radius_all(6)
-	timer_bar.add_theme_stylebox_override("fill", fill)
-
-	# 試合結果（画面全体を暗くして中央に表示）
+	# 試合結果（画面全体を暗くして、中央にテスト用紙ふうのカード）
 	result_panel = PanelContainer.new()
 	var dim := StyleBoxFlat.new()
-	dim.bg_color = Color(0, 0, 0, 0.6)
+	dim.bg_color = Color(0.1, 0.06, 0.02, 0.55)
 	result_panel.add_theme_stylebox_override("panel", dim)
 	result_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	var center := CenterContainer.new()
 	result_panel.add_child(center)
 	var card := PanelContainer.new()
 	var card_style := StyleBoxFlat.new()
-	card_style.bg_color = Color("2a2d3e")
-	card_style.set_corner_radius_all(16)
+	card_style.bg_color = Color("fffcf2")
+	card_style.border_color = Color("8b5a2b")
+	card_style.set_border_width_all(3)
+	card_style.set_corner_radius_all(6)
 	card_style.set_content_margin_all(32)
+	card_style.shadow_color = Color(0, 0, 0, 0.35)
+	card_style.shadow_size = 10
 	card.add_theme_stylebox_override("panel", card_style)
 	card.custom_minimum_size = Vector2(560, 0)
 	center.add_child(card)
 	var rbox := _vbox(14)
 	card.add_child(rbox)
-	var rtitle := _label("試合結果", 34)
+	var rtitle := _label("けっか はっぴょう", 34)
 	rtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	rtitle.add_theme_color_override("font_color", Color("d9443a"))
 	rbox.add_child(rtitle)
 	result_label = _label("", 22)
+	result_label.add_theme_color_override("font_color", INK)
 	rbox.add_child(result_label)
 	var rbuttons := _hbox(12)
 	rbuttons.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -840,7 +850,7 @@ func _build_game() -> void:
 	rbuttons.add_child(_button("メニューへ", func(): _send_action({"type": "room.leave"})))
 	rbox.add_child(rbuttons)
 	result_panel.visible = false
-	# MarginContainer の外（ルート直下）に置いて全画面を覆う
+	# ルート直下に置いて全画面を覆う
 	add_child(result_panel)
 
 
@@ -855,7 +865,97 @@ func _make_theme() -> Theme:
 	bundled.fallbacks = [font]
 	t.default_font = bundled
 	t.default_font_size = 20
+
+	# ボタン：画用紙ふう
+	var paper := _style(Color("fff8e6"), Color("8b5a2b"), 2, 10)
+	paper.shadow_color = Color(0, 0, 0, 0.25)
+	paper.shadow_size = 1
+	paper.shadow_offset = Vector2(0, 3)
+	paper.content_margin_left = 14
+	paper.content_margin_right = 14
+	paper.content_margin_top = 6
+	paper.content_margin_bottom = 6
+	var hover := paper.duplicate() as StyleBoxFlat
+	hover.bg_color = Color("ffeec2")
+	var pressed := paper.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color("ffd66b")
+	pressed.shadow_offset = Vector2(0, 1)
+	var disabled := paper.duplicate() as StyleBoxFlat
+	disabled.bg_color = Color("e6dcc6")
+	disabled.border_color = Color("b39a7a")
+	for type in ["Button", "OptionButton"]:
+		t.set_stylebox("normal", type, paper)
+		t.set_stylebox("hover", type, hover)
+		t.set_stylebox("pressed", type, pressed)
+		t.set_stylebox("hover_pressed", type, pressed)
+		t.set_stylebox("disabled", type, disabled)
+		t.set_stylebox("focus", type, StyleBoxEmpty.new())
+		for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+			t.set_color(c, type, INK)
+		t.set_color("font_disabled_color", type, Color(INK, 0.45))
+
+	# 文字：黒板のチョーク色
+	t.set_color("font_color", "Label", CHALK)
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+		t.set_color(c, "CheckBox", CHALK)
+	for sb_name in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
+		t.set_stylebox(sb_name, "CheckBox", StyleBoxEmpty.new())
+
+	# 入力欄：黒板に白い枠
+	var edit := _style(Color("234a38"), Color(1, 1, 1, 0.45), 2, 6)
+	edit.set_content_margin_all(8)
+	var edit_focus := edit.duplicate() as StyleBoxFlat
+	edit_focus.border_color = CHALK_YELLOW
+	var edit_ro := edit.duplicate() as StyleBoxFlat
+	edit_ro.bg_color = Color("2b5241")
+	edit_ro.border_color = Color(1, 1, 1, 0.2)
+	t.set_stylebox("normal", "LineEdit", edit)
+	t.set_stylebox("focus", "LineEdit", edit_focus)
+	t.set_stylebox("read_only", "LineEdit", edit_ro)
+	t.set_color("font_color", "LineEdit", CHALK)
+	t.set_color("font_uneditable_color", "LineEdit", Color(CHALK, 0.55))
+	t.set_color("font_placeholder_color", "LineEdit", Color(CHALK, 0.4))
+	t.set_color("caret_color", "LineEdit", CHALK)
+
+	# タイマー：黄色いチョークの線
+	t.set_stylebox("background", "ProgressBar", _style(Color(0, 0, 0, 0.25), Color(0, 0, 0, 0), 0, 7))
+	t.set_stylebox("fill", "ProgressBar", _style(CHALK_YELLOW, Color(0, 0, 0, 0), 0, 7))
 	return t
+
+
+func _style(bg: Color, border: Color, border_w: int, radius: int) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.border_color = border
+	sb.set_border_width_all(border_w)
+	sb.set_corner_radius_all(radius)
+	return sb
+
+
+## 黒板（木の枠 + 下にチョーク置き）
+func _chalkboard_style(margin: int) -> StyleBoxFlat:
+	var sb := _style(Color("2f5e47"), Color("9a6a3a"), 12, 8)
+	sb.border_width_bottom = 22
+	sb.set_content_margin_all(margin)
+	sb.content_margin_bottom = margin + 8
+	sb.shadow_color = Color(0, 0, 0, 0.35)
+	sb.shadow_size = 8
+	sb.shadow_offset = Vector2(0, 6)
+	return sb
+
+
+## 画面の中央に黒板を置き、その中の縦並びボックスを返す
+func _board(screen: Control, sep: int) -> VBoxContainer:
+	var center := CenterContainer.new()
+	screen.add_child(center)
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", _chalkboard_style(28))
+	panel.custom_minimum_size.x = 900
+	center.add_child(panel)
+	var box := _vbox(sep)
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	panel.add_child(box)
+	return box
 
 
 func _screen() -> Control:
