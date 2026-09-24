@@ -166,6 +166,9 @@ export class Hub {
       case "input.call":
         room?.applyInput(id, { kind: "call", roundId: Number(msg.roundId), number: Number(msg.number) });
         return;
+      case "input.ready":
+        room?.markReady(id, Number(msg.roundId));
+        return;
       case "emote":
         room?.emote(id, Number(msg.id));
         return;

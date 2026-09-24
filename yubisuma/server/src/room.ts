@@ -18,6 +18,7 @@ export type Phase = "lobby" | "announce" | "input" | "reveal" | "gameEnd" | "mat
 
 export interface RoomSettings {
   maxPlayers: number;
+  /** 入力の最大時間。全員が「決定」したらその時点で締め切る */
   inputMs: number;
   winsNeeded: number;
   showHistory: boolean;
@@ -27,7 +28,7 @@ export interface RoomSettings {
 
 export const defaultSettings = (mode: RoomMode): RoomSettings => ({
   maxPlayers: mode === "ranked" ? 2 : 4,
-  inputMs: mode === "ranked" ? 3000 : 4000,
+  inputMs: 10000,
   winsNeeded: mode === "ranked" ? 2 : 1,
   showHistory: true,
   showActivity: mode !== "ranked",
@@ -38,7 +39,7 @@ export function sanitizeSettings(input: Partial<RoomSettings>, base: RoomSetting
     typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : def;
   return {
     maxPlayers: Math.round(num(input.maxPlayers, 2, 4, base.maxPlayers)),
-    inputMs: Math.round(num(input.inputMs, 2000, 10000, base.inputMs) / 500) * 500,
+    inputMs: Math.round(num(input.inputMs, 3000, 10000, base.inputMs) / 500) * 500,
     winsNeeded: Math.round(num(input.winsNeeded, 1, 5, base.winsNeeded)),
     showHistory: typeof input.showHistory === "boolean" ? input.showHistory : base.showHistory,
     showActivity: typeof input.showActivity === "boolean" ? input.showActivity : base.showActivity,
@@ -56,8 +57,8 @@ export interface Timings {
 }
 
 export const defaultTimings: Timings = {
-  announceMs: 800,
-  revealMs: 2200,
+  announceMs: 1000,
+  revealMs: 3000,
   gameEndMs: 3500,
   graceMs: 100,
   activityDelayMs: 150,
@@ -106,6 +107,8 @@ export class Room {
   private roundId = 0;
   private thumbs: Record<string, number> = {};
   private call: number | null = null;
+  /** このラウンドで「決定」したプレイヤー */
+  private ready = new Set<string>();
   private history: Record<string, number[]> = {};
   private lastReveal: RoundResult | null = null;
   private lastPlacements: string[] = [];
@@ -193,6 +196,7 @@ export class Room {
     if (!this.inMatch) return this.leave(id);
     m.connected = false;
     this.broadcast("room.update");
+    this.checkAllReady();
     const timer = setTimeout(() => {
       this.graceTimers.delete(id);
       if (m.connected || !this.inMatch) return;
@@ -219,6 +223,7 @@ export class Room {
     m.connected = true;
     m.cpuLevel = 2;
     m.name = `${m.name}（CPU代行）`;
+    if (this.phase === "input") this.ready.add(m.id);
     if (this.hostId === m.id) this.hostId = this.humans()[0]?.id ?? null;
     this.broadcast("room.update");
     this.checkEmpty();
@@ -270,6 +275,7 @@ export class Room {
   private beginRound() {
     this.roundId += 1;
     this.call = null;
+    this.ready.clear();
     this.setPhase("announce", this.t.announceMs, () => this.openInput());
   }
 
@@ -280,12 +286,14 @@ export class Room {
     const hands = Object.fromEntries(activePlayers(game).map((p) => [p.id, p.hands]));
     for (const m of this.members) {
       if (!m.isCpu || !(m.id in hands)) continue;
-      const delay = this.settings.inputMs * (0.25 + this.rng() * 0.6);
+      // CPU は 1〜3.5 秒くらい考えてから決定する
+      const delay = Math.min(this.settings.inputMs * 0.8, 1000 + this.rng() * 2500);
       const timer = setTimeout(() => {
         this.roundTimers.delete(timer);
         const d = decide(m.cpuLevel, { selfId: m.id, isCaller: m.id === caller, hands, history: this.history }, this.rng);
         this.applyInput(m.id, { kind: "thumbs", roundId: this.roundId, up: d.thumbs });
         if (d.call !== null) this.applyInput(m.id, { kind: "call", roundId: this.roundId, number: d.call });
+        this.markReady(m.id, this.roundId);
       }, delay);
       this.roundTimers.add(timer);
     }
@@ -299,7 +307,7 @@ export class Room {
     const game = this.game;
     if (this.phase !== "input" || !game || input.roundId !== this.roundId) return false;
     const p = game.players.find((x) => x.id === id);
-    if (!p || p.hands === 0) return false;
+    if (!p || p.hands === 0 || this.ready.has(id)) return false;
     if (input.kind === "thumbs") {
       const up = clampThumbs(input.up, p.hands);
       if (up !== this.thumbs[id]) {
@@ -316,6 +324,28 @@ export class Room {
     return true;
   }
 
+  /** 「決定」。以降そのラウンドの入力は変えられない。全員そろえば即締め切り */
+  markReady(id: string, roundId: number): boolean {
+    const game = this.game;
+    if (this.phase !== "input" || !game || roundId !== this.roundId) return false;
+    const p = game.players.find((x) => x.id === id);
+    if (!p || p.hands === 0 || this.ready.has(id)) return false;
+    this.ready.add(id);
+    this.broadcast("round.ready");
+    this.checkAllReady();
+    return true;
+  }
+
+  private checkAllReady() {
+    if (this.phase !== "input" || !this.game) return;
+    const waiting = activePlayers(this.game).some((p) => {
+      const m = this.members.find((x) => x.id === p.id);
+      // 切断中の人は待たない（前ラウンドの指のまま・コールなし）
+      return m !== undefined && m.connected && !this.ready.has(p.id);
+    });
+    if (!waiting) this.closeInput();
+  }
+
   private emitActivity(id: string) {
     const timer = setTimeout(() => {
       this.roundTimers.delete(timer);
@@ -328,7 +358,8 @@ export class Room {
 
   private closeInput() {
     this.clearRoundTimers();
-    const { state, result } = resolveRound(this.game!, this.thumbs, this.call);
+    // 数字を選ばずに決定・時間切れになったコーラーは「0」でコールしたことにする
+    const { state, result } = resolveRound(this.game!, this.thumbs, this.call ?? 0);
     this.game = state;
     this.lastReveal = result;
     for (const [id, n] of Object.entries(result.thumbs)) this.history[id].push(n);
@@ -437,6 +468,7 @@ export class Room {
           placed: placed === -1 ? null : placed + 1,
           wins: this.wins[m.id] ?? 0,
           history: this.settings.showHistory ? (this.history[m.id] ?? []).slice(-HISTORY_SHOWN) : [],
+          ready: this.phase === "input" && this.ready.has(m.id),
         };
       }),
       you: {

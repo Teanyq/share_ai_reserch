@@ -25,7 +25,10 @@ var phase_total_ms := 1
 var my_left_up := false
 var my_right_up := false
 var my_call := -1
+var my_ready := false
 var last_round_id := -1
+var last_tick_sec := -1
+var sfx: Sfx
 
 # 自動プレイ（動作確認用）
 var autoplay := ""
@@ -76,6 +79,8 @@ var table: TableView
 var table_ids: Array = []
 var left_btn: Button
 var right_btn: Button
+var ready_btn: Button
+var sound_btn: Button
 var call_box: HBoxContainer
 var call_title: Label
 var result_panel: PanelContainer
@@ -93,6 +98,9 @@ func _ready() -> void:
 
 	if FileAccess.file_exists(SETTINGS_PATH):
 		cfg.load(SETTINGS_PATH)
+	sfx = Sfx.new()
+	sfx.enabled = cfg.get_value("sound", "enabled", true)
+	add_child(sfx)
 	_build_title()
 	_build_queue()
 	_build_lobby()
@@ -209,6 +217,7 @@ func _on_message(msg: Dictionary) -> void:
 				seat.hand.twitch()
 		"emote":
 			_show_emote(str(msg.get("playerId")), int(msg.get("emoteId", 0)))
+			sfx.play("emote")
 		_:
 			if msg.has("state"):
 				_apply_state(type, msg.get("state"))
@@ -239,6 +248,10 @@ func _apply_state(type: String, s: Dictionary) -> void:
 	if round_id != last_round_id:
 		last_round_id = round_id
 		my_call = -1
+		my_ready = false
+		last_tick_sec = -1
+	if bool(_player(my_id).get("ready", false)):
+		my_ready = true
 	var you: Dictionary = s.get("you", {})
 	if type != "input.ack" or phase != "input":
 		var up := int(you.get("thumbs", 0))
@@ -247,8 +260,26 @@ func _apply_state(type: String, s: Dictionary) -> void:
 	if you.get("call") != null:
 		my_call = int(you.get("call"))
 	_render_game()
+	_play_sounds(type)
 	if autoplay != "":
 		_autoplay_step(type)
+
+
+func _play_sounds(type: String) -> void:
+	match type:
+		"round.announce":
+			sfx.play("announce")
+		"round.reveal":
+			sfx.play("reveal")
+			var reveal = state.get("lastReveal")
+			if reveal is Dictionary:
+				sfx.play_later("hit" if reveal.get("hit") else "miss", 0.45)
+		"game.end", "match.end":
+			var gp: Array = state.get("gamePlacements", [])
+			if type == "match.end" and state.get("match") is Dictionary:
+				gp = state.get("match").get("placements", [])
+			if gp.size() > 0 and str(gp[0]) == my_id:
+				sfx.play("win")
 
 
 # ───────── 描画 ─────────
@@ -297,7 +328,7 @@ func _render_game() -> void:
 	var wins_text := ""
 	if int(s.get("settings", {}).get("winsNeeded", 1)) > 1:
 		wins_text = " ｜ %d 本先取" % int(s.get("settings", {}).get("winsNeeded", 1))
-	top_label.text = "%s ｜ ゲーム %d%s ｜ ラウンド %d%s" % [
+	top_label.text = "%s ｜ ゲーム %d%s ｜ ラウンド %d%s　　（A / D：指　数字キー：コール　Space：決定）" % [
 		mode_name, int(s.get("gameNo", 1)), wins_text, int(s.get("round", 0)), "  【サドンデス：当てると2本減る】" if s.get("suddenDeath") else ""]
 
 	# 机を囲む席（メンバーが変わったら作り直す）
@@ -331,6 +362,8 @@ func _render_game() -> void:
 			line2 += "  %d 位" % int(p.get("placed"))
 		if id == caller_id and calling:
 			line2 += "  コール！"
+		if p.get("ready") and phase == "input":
+			line2 += "  OK！"
 		table.set_tag(id, line1 + "\n" + line2, id == caller_id and calling)
 		var hist: Array = p.get("history", [])
 		table.set_note(id, "さいきん " + " ".join(hist.map(func(n): return str(int(n)))) if hist.size() > 0 else "")
@@ -338,7 +371,7 @@ func _render_game() -> void:
 	match phase:
 		"announce", "input":
 			table.center_small = "%s のコール" % ("あなた" if caller_id == my_id else _name_of(caller_id))
-			table.center_big = str(my_call) if caller_id == my_id and my_call >= 0 else "？"
+			table.center_big = str(maxi(my_call, 0)) if caller_id == my_id else "？"
 		"reveal":
 			if reveal is Dictionary:
 				table.center_small = "合計 %d … %s" % [int(reveal.get("total", 0)), "あたり！" if reveal.get("hit") else "はずれ"]
@@ -354,10 +387,12 @@ func _render_game() -> void:
 		"announce":
 			phase_label.text = "あなたのコール！" if caller_id == my_id else "%s のコール！" % caller_name
 		"input":
-			if caller_id == my_id:
-				phase_label.text = "数字と指を決めて！（A / D で指、数字キーでコール）"
+			if my_ready:
+				phase_label.text = "決定！ みんなを待っています…"
+			elif caller_id == my_id:
+				phase_label.text = "数字と指を決めて「決定」！"
 			else:
-				phase_label.text = "%s のコール … 指を決めて！（A / D）" % caller_name
+				phase_label.text = "%s のコール … 指を決めて「決定」！" % caller_name
 		"reveal":
 			phase_label.text = _reveal_text(reveal)
 		"gameEnd":
@@ -368,7 +403,10 @@ func _render_game() -> void:
 
 	# 自分の操作
 	var my_hands := int(me.get("hands", 0)) if me.get("hands") != null else 0
-	var can_input := phase == "input" and my_hands > 0
+	var can_input := phase == "input" and my_hands > 0 and not my_ready
+	ready_btn.visible = phase == "input" and my_hands > 0
+	ready_btn.disabled = not can_input
+	ready_btn.text = "決定済み！" if my_ready else "決定！\n[Space]"
 	left_btn.visible = my_hands >= 1
 	right_btn.visible = my_hands >= 2
 	left_btn.disabled = not can_input
@@ -393,11 +431,11 @@ func _render_game() -> void:
 		for c in call_box.get_children():
 			var b := c as Button
 			var n := int(b.text)
-			b.set_pressed_no_signal(n == my_call)
-			b.disabled = phase != "input"
+			b.set_pressed_no_signal(n == maxi(my_call, 0))
+			b.disabled = not can_input
 			var impossible := n < _my_thumbs() or n > _my_thumbs() + max_n - my_hands
 			b.modulate = Color(1, 1, 1, 0.45) if impossible else Color.WHITE
-		call_title.text = "コールする数字（%s）" % ("未選択" if my_call < 0 else str(my_call))
+		call_title.text = "コールする数字（%s）" % ("未選択なら 0" if my_call < 0 else str(my_call))
 
 	# 結果
 	result_panel.visible = phase == "matchEnd"
@@ -454,7 +492,7 @@ func _my_thumbs() -> int:
 
 
 func _toggle_thumb(right: bool) -> void:
-	if str(state.get("phase")) != "input":
+	if str(state.get("phase")) != "input" or my_ready:
 		return
 	var hands := int(_player(my_id).get("hands", 0))
 	if right:
@@ -466,15 +504,37 @@ func _toggle_thumb(right: bool) -> void:
 			return
 		my_left_up = not my_left_up
 	net.send({"type": "input.thumbs", "roundId": int(state.get("roundId")), "up": _my_thumbs()})
+	sfx.play("click")
 	_render_game()
 
 
 func _choose_call(n: int) -> void:
-	if str(state.get("phase")) != "input" or str(state.get("callerId")) != my_id:
+	if str(state.get("phase")) != "input" or str(state.get("callerId")) != my_id or my_ready:
+		return
+	var range_arr: Array = state.get("callRange", [0, 0])
+	if n > int(range_arr[1]):
 		return
 	my_call = n
 	net.send({"type": "input.call", "roundId": int(state.get("roundId")), "number": n})
+	sfx.play("call")
 	_render_game()
+
+
+## 決定。数字を選んでいないコーラーは 0 でコールしたことになる（サーバ側で処理）
+func _press_ready() -> void:
+	if str(state.get("phase")) != "input" or my_ready or int(_player(my_id).get("hands", 0)) <= 0:
+		return
+	my_ready = true
+	net.send({"type": "input.ready", "roundId": int(state.get("roundId"))})
+	sfx.play("ready")
+	_render_game()
+
+
+func _toggle_sound() -> void:
+	sfx.enabled = not sfx.enabled
+	cfg.set_value("sound", "enabled", sfx.enabled)
+	cfg.save(SETTINGS_PATH)
+	sound_btn.text = "音：ON" if sfx.enabled else "音：OFF"
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -486,6 +546,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_toggle_thumb(false)
 	elif key == KEY_D:
 		_toggle_thumb(true)
+	elif key == KEY_SPACE or key == KEY_ENTER or key == KEY_KP_ENTER:
+		_press_ready()
+		get_viewport().set_input_as_handled()
 	elif key >= KEY_0 and key <= KEY_9:
 		_choose_call(key - KEY_0)
 	elif key >= KEY_KP_0 and key <= KEY_KP_9:
@@ -501,7 +564,13 @@ func _process(_delta: float) -> void:
 		timer_label.visible = phase == "input"
 		timer_bar.value = 100.0 * left / phase_total_ms
 		timer_label.text = "%.1f 秒" % (left / 1000.0)
-		timer_label.add_theme_color_override("font_color", Color("ff8f8f") if left < 1000 else CHALK)
+		timer_label.add_theme_color_override("font_color", Color("ff8f8f") if left < 3000 else CHALK)
+		# 残り 3 秒からカウントダウン音（決定済みなら鳴らさない）
+		if phase == "input" and not my_ready and left > 0 and left <= 3000:
+			var sec := int(ceil(left / 1000.0))
+			if sec != last_tick_sec:
+				last_tick_sec = sec
+				sfx.play("tick")
 	if toast_until > 0 and now > toast_until:
 		toast_label.text = ""
 		toast_until = 0
@@ -540,7 +609,8 @@ func _autoplay_step(type: String) -> void:
 	if type == "round.input" and shot_dir != "" and str(state.get("callerId")) == my_id and not shots_taken.has("input"):
 		_toggle_thumb(false)
 		_choose_call(2)
-		_shot("input")
+		_press_ready()
+		get_tree().create_timer(1.8).timeout.connect(func(): _shot("input"))
 		return
 	if type == "round.reveal" and int(state.get("round", 0)) >= 3:
 		_shot("reveal")
@@ -553,7 +623,9 @@ func _autoplay_step(type: String) -> void:
 			_toggle_thumb(true)
 		if str(state.get("callerId")) == my_id:
 			var range_arr: Array = state.get("callRange", [0, 0])
-			_choose_call(randi_range(0, int(range_arr[1])))
+			if randf() < 0.8:
+				_choose_call(randi_range(0, int(range_arr[1])))
+		_press_ready()
 		if randf() < 0.1:
 			net.send({"type": "emote", "id": randi_range(0, EMOTES.size() - 1)})
 	elif type == "round.reveal":
@@ -583,9 +655,6 @@ func _build_title() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_color_override("font_color", CHALK_YELLOW)
 	box.add_child(title)
-	var sub := _label("〜 放課後の教室で、いっせーので！ 〜", 22)
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(sub)
 
 	var form := GridContainer.new()
 	form.columns = 2
@@ -691,7 +760,7 @@ func _build_lobby() -> void:
 	right.columns = 2
 	right.add_theme_constant_override("h_separation", 12)
 	set_players = _spin(2, 4, 1, "人")
-	set_input = _spin(2, 10, 0.5, "秒")
+	set_input = _spin(3, 10, 0.5, "秒")
 	set_wins = _spin(1, 5, 1, "本先取")
 	set_history = CheckBox.new()
 	set_history.text = "相手の履歴を表示"
@@ -776,7 +845,17 @@ func _build_game() -> void:
 	exit_btn.offset_right = -16
 	exit_btn.offset_top = 16
 	exit_btn.offset_bottom = 56
+	exit_btn.focus_mode = Control.FOCUS_NONE
 	game_screen.add_child(exit_btn)
+	sound_btn = _button("音：ON" if sfx.enabled else "音：OFF", _toggle_sound)
+	sound_btn.anchor_left = 1.0
+	sound_btn.anchor_right = 1.0
+	sound_btn.offset_left = -106
+	sound_btn.offset_right = -16
+	sound_btn.offset_top = 66
+	sound_btn.offset_bottom = 106
+	sound_btn.focus_mode = Control.FOCUS_NONE
+	game_screen.add_child(sound_btn)
 
 	# 手元の操作（床の上）
 	var bottom := _vbox(8)
@@ -802,6 +881,21 @@ func _build_game() -> void:
 	call_box = _hbox(6)
 	call_col.add_child(call_box)
 	controls.add_child(call_col)
+	ready_btn = _button("決定！", _press_ready)
+	ready_btn.custom_minimum_size = Vector2(150, 68)
+	ready_btn.focus_mode = Control.FOCUS_NONE
+	ready_btn.add_theme_font_size_override("font_size", 22)
+	var ready_style := _style(Color("ff9d5c"), Color("8b3e1b"), 3, 12)
+	ready_style.shadow_color = Color(0, 0, 0, 0.3)
+	ready_style.shadow_size = 1
+	ready_style.shadow_offset = Vector2(0, 4)
+	ready_btn.add_theme_stylebox_override("normal", ready_style)
+	var ready_hover := ready_style.duplicate() as StyleBoxFlat
+	ready_hover.bg_color = Color("ffb27a")
+	ready_btn.add_theme_stylebox_override("hover", ready_hover)
+	ready_btn.add_theme_color_override("font_color", Color.WHITE)
+	ready_btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	controls.add_child(ready_btn)
 	bottom.add_child(controls)
 
 	var emotes := _hbox(6)

@@ -54,6 +54,7 @@ class Bot {
         if (s.callerId === this.id) {
           this.send({ type: "input.call", roundId: s.roundId, number: Math.floor(Math.random() * (s.callRange[1] + 1)) });
         }
+        this.send({ type: "input.ready", roundId: s.roundId });
       }
     }
     this.waiters = this.waiters.filter((w) => (w.pred(m) ? (w.resolve(m), false) : true));

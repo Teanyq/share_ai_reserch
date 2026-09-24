@@ -85,15 +85,15 @@ func _draw_fist(pos: Vector2, fist: Vector2, thumb_up: bool, inner_right: bool) 
 		var x := pos.x + fist.x * k / 4.0
 		draw_line(Vector2(x, pos.y + fist.y - 22), Vector2(x, pos.y + fist.y - 8), SKIN_SHADE.darkened(0.1), 2.0)
 	# 親指はこぶしの内側（左手なら右端、右手なら左端）
-	var thumb := Vector2(24, 46)
-	var tx := pos.x + fist.x - thumb.x - 4 if inner_right else pos.x + 4
+	var thumb := Vector2(14, 42)
+	var tx := pos.x + fist.x - thumb.x - 8 if inner_right else pos.x + 8
 	if thumb_up:
-		var r := Rect2(tx, pos.y - thumb.y + 16, thumb.x, thumb.y)
-		_draw_round_rect(r, 11.0, SKIN)
-		_draw_round_rect(Rect2(r.position.x + 5, r.position.y + 4, thumb.x - 10, 12), 5.0, Color("fff1e4"))
+		var r := Rect2(tx, pos.y - thumb.y + 14, thumb.x, thumb.y)
+		_draw_round_rect(r, 7.0, SKIN)
+		_draw_round_rect(Rect2(r.position.x + 3, r.position.y + 3, thumb.x - 6, 8), 3.0, Color("fff1e4"), false)
 	else:
-		# 下げた親指はこぶしの上に横たわる
-		_draw_round_rect(Rect2(pos.x + 7, pos.y + 6, fist.x - 14, 17), 8.0, SKIN_SHADE)
+		# 下げた親指はこぶしの上に細く横たわる
+		_draw_round_rect(Rect2(pos.x + 10, pos.y + 8, fist.x - 20, 10), 5.0, SKIN_SHADE)
 
 
 func _draw_round_rect(r: Rect2, radius: float, color: Color, outline := true) -> void:
