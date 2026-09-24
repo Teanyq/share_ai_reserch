@@ -24,10 +24,18 @@ var sleeve := Color("5b8bd6"):
 		queue_redraw()
 
 var _twitch := 0.0
+var _pump := 0.0
+var _pump_len := 1.0
 
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
+## 掛け声に合わせてこぶしを上下に振る
+func pump(sec: float) -> void:
+	_pump = sec
+	_pump_len = sec
 
 
 ## 相手が入力を変えた瞬間の「ピクッ」演出（値は分からない）
@@ -38,6 +46,9 @@ func twitch() -> void:
 func _process(delta: float) -> void:
 	if _twitch > 0.0:
 		_twitch = maxf(0.0, _twitch - delta * 5.0)
+		queue_redraw()
+	if _pump > 0.0:
+		_pump = maxf(0.0, _pump - delta)
 		queue_redraw()
 
 
@@ -53,9 +64,11 @@ func _draw() -> void:
 	var x0 := (w - total_w) / 2
 	var y0 := h - fist.y - 44
 	var shake := sin(_twitch * 40.0) * 4.0 * _twitch
+	# 上下に 3 回振る（最後はぴたっと止まる）
+	var bob := -absf(sin((_pump_len - _pump) / _pump_len * PI * 3.0)) * 12.0 if _pump > 0.0 else 0.0
 	for i in hands:
 		var up := thumbs_up >= 0 and i < thumbs_up
-		var pos := Vector2(x0 + i * (fist.x + gap) + shake, y0)
+		var pos := Vector2(x0 + i * (fist.x + gap) + shake, y0 + bob)
 		_draw_arm(pos, fist, h)
 		_draw_fist(pos, fist, up, i == 0 and hands == 2)
 	if thumbs_up < 0:
@@ -85,15 +98,15 @@ func _draw_fist(pos: Vector2, fist: Vector2, thumb_up: bool, inner_right: bool) 
 		var x := pos.x + fist.x * k / 4.0
 		draw_line(Vector2(x, pos.y + fist.y - 22), Vector2(x, pos.y + fist.y - 8), SKIN_SHADE.darkened(0.1), 2.0)
 	# 親指はこぶしの内側（左手なら右端、右手なら左端）
-	var thumb := Vector2(14, 42)
-	var tx := pos.x + fist.x - thumb.x - 8 if inner_right else pos.x + 8
+	var thumb := Vector2(19, 44)
+	var tx := pos.x + fist.x - thumb.x - 6 if inner_right else pos.x + 6
 	if thumb_up:
-		var r := Rect2(tx, pos.y - thumb.y + 14, thumb.x, thumb.y)
-		_draw_round_rect(r, 7.0, SKIN)
-		_draw_round_rect(Rect2(r.position.x + 3, r.position.y + 3, thumb.x - 6, 8), 3.0, Color("fff1e4"), false)
+		var r := Rect2(tx, pos.y - thumb.y + 15, thumb.x, thumb.y)
+		_draw_round_rect(r, 9.0, SKIN)
+		_draw_round_rect(Rect2(r.position.x + 4, r.position.y + 3, thumb.x - 8, 10), 4.0, Color("fff1e4"), false)
 	else:
-		# 下げた親指はこぶしの上に細く横たわる
-		_draw_round_rect(Rect2(pos.x + 10, pos.y + 8, fist.x - 20, 10), 5.0, SKIN_SHADE)
+		# 下げた親指はこぶしの上に横たわる
+		_draw_round_rect(Rect2(pos.x + 8, pos.y + 7, fist.x - 16, 13), 6.0, SKIN_SHADE)
 
 
 func _draw_round_rect(r: Rect2, radius: float, color: Color, outline := true) -> void:

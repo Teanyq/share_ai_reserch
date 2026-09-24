@@ -10,6 +10,7 @@ const RECONNECT_SEC := 2.0
 
 var url := ""
 var player_name := ""
+var player_chant := ""
 var token := ""
 
 var _ws := WebSocketPeer.new()
@@ -18,9 +19,10 @@ var _retry_in := 0.0
 var _active := false
 
 
-func start(server_url: String, name: String, saved_token: String) -> void:
+func start(server_url: String, name: String, saved_token: String, chant := "") -> void:
 	url = server_url
 	player_name = name
+	player_chant = chant
 	token = saved_token
 	_active = true
 	_open()
@@ -61,7 +63,7 @@ func _process(delta: float) -> void:
 	if state == WebSocketPeer.STATE_OPEN:
 		if not _was_open:
 			_was_open = true
-			send({"type": "hello", "name": player_name, "token": token})
+			send({"type": "hello", "name": player_name, "token": token, "chant": player_chant})
 			connected.emit()
 		while _ws.get_available_packet_count() > 0:
 			var text := _ws.get_packet().get_string_from_utf8()

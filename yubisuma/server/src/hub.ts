@@ -4,7 +4,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { displayRating, initialRating, tierName, update, type Rating } from "./glicko2.ts";
-import { Room, sanitizeSettings, defaultSettings, type RoomDeps, type RoomMode, type RoomSettings } from "./room.ts";
+import { Room, sanitizeChant, sanitizeSettings, defaultSettings, type RoomDeps, type RoomMode, type RoomSettings } from "./room.ts";
 
 export interface Connection {
   send(msg: object): void;
@@ -15,6 +15,7 @@ interface Profile {
   id: string;
   token: string;
   name: string;
+  chant?: string;
   ranked: Rating;
   rankedGames: number;
   rankedWins: number;
@@ -102,6 +103,7 @@ export class Hub {
       this.byId.set(profile.id, profile);
     }
     profile.name = name;
+    if (msg.chant !== undefined) profile.chant = sanitizeChant(msg.chant);
     this.scheduleSave();
 
     const old = this.conns.get(profile.id);
@@ -121,6 +123,13 @@ export class Hub {
   private dispatch(id: string, msg: Record<string, unknown>) {
     const room = this.roomOf.get(id);
     switch (msg.type) {
+      case "profile.update": {
+        const p = this.byId.get(id)!;
+        p.chant = sanitizeChant(msg.chant);
+        this.scheduleSave();
+        room?.setChant(id, p.chant);
+        return this.send(id, { type: "profile", profile: this.publicProfile(p) });
+      }
       case "profile.get":
         return this.send(id, { type: "profile", profile: this.publicProfile(this.byId.get(id)!) });
       case "practice.start": {
@@ -208,7 +217,8 @@ export class Hub {
     if (this.roomOf.get(id) === room) return room.sendState(id, "room.update");
     this.leaveQueue(id);
     this.leaveRoom(id);
-    room.addMember(id, this.byId.get(id)!.name);
+    const p = this.byId.get(id)!;
+    room.addMember(id, p.name, p.chant);
     this.roomOf.set(id, room);
   }
 
@@ -326,7 +336,8 @@ export class Hub {
   private launch(mode: QueueMode, entries: QueueEntry[], cpus: number) {
     const room = this.createRoom(mode);
     for (const e of entries) {
-      room.addMember(e.playerId, this.byId.get(e.playerId)!.name);
+      const p = this.byId.get(e.playerId)!;
+      room.addMember(e.playerId, p.name, p.chant);
       this.roomOf.set(e.playerId, room);
     }
     for (let i = 0; i < cpus; i++) room.addCpu(2);
@@ -340,6 +351,7 @@ export class Hub {
     return {
       id: p.id,
       name: p.name,
+      chant: sanitizeChant(p.chant),
       rating: display,
       tier: tierName(display, p.rankedGames),
       rankedGames: p.rankedGames,

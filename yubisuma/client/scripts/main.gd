@@ -12,6 +12,9 @@ const FONT_BOLD := preload("res://fonts/MPLUSRounded1c-Bold.ttf")
 const CHALK := Color("f4f1e6")
 const CHALK_YELLOW := Color("ffe27a")
 const INK := Color("4a3222")
+const DEFAULT_CHANT := "いっせーのーで"
+## 地域でいろいろある掛け声。自由入力もできる
+const CHANT_PRESETS := ["いっせーのーで", "いっせーので", "せーの", "ゆびスマ", "いっせっせーの", "いっせーの", "チッチ"]
 const MODE_NAMES := {"private": "プライベート", "casual": "カジュアル", "ranked": "ランク", "practice": "CPU練習"}
 
 var net: Net
@@ -53,6 +56,8 @@ var status_label: Label
 var profile_label: Label
 var cpu_level: OptionButton
 var cpu_count: SpinBox
+var chant_option: OptionButton
+var chant_edit: LineEdit
 
 # マッチング待ち
 var queue_label: Label
@@ -86,6 +91,11 @@ var call_title: Label
 var result_panel: PanelContainer
 var result_label: Label
 var again_btn: Button
+var chant_overlay: Control
+var chant_label: Label
+var num_label: Label
+var reveal_tween: Tween
+var reveal_hold_until := 0  # この時刻までは手を見せない（掛け声の演出中）
 var toast_label: Label
 var toast_until := 0
 
@@ -153,7 +163,7 @@ func _connect_server() -> void:
 		saved_token = ""  # 自動プレイ・ゲストは毎回別プレイヤー扱い
 	status_label.text = "接続中… " + server_edit.text
 	net.stop()
-	net.start(server_edit.text, name_edit.text, saved_token)
+	net.start(server_edit.text, name_edit.text, saved_token, _my_chant())
 
 
 ## 名前やサーバが変わっていたら繋ぎ直してから送る
@@ -259,6 +269,10 @@ func _apply_state(type: String, s: Dictionary) -> void:
 		my_right_up = up >= 2
 	if you.get("call") != null:
 		my_call = int(you.get("call"))
+	if type == "round.reveal":
+		_play_reveal_anim()
+	elif phase != "reveal":
+		_stop_reveal_anim()
 	_render_game()
 	_play_sounds(type)
 	if autoplay != "":
@@ -269,11 +283,6 @@ func _play_sounds(type: String) -> void:
 	match type:
 		"round.announce":
 			sfx.play("announce")
-		"round.reveal":
-			sfx.play("reveal")
-			var reveal = state.get("lastReveal")
-			if reveal is Dictionary:
-				sfx.play_later("hit" if reveal.get("hit") else "miss", 0.45)
 		"game.end", "match.end":
 			var gp: Array = state.get("gamePlacements", [])
 			if type == "match.end" and state.get("match") is Dictionary:
@@ -296,7 +305,7 @@ func _render_lobby() -> void:
 	for p in state.get("players", []):
 		var row := HBoxContainer.new()
 		var host_mark := "（ホスト）" if str(p.get("id")) == str(state.get("hostId")) else ""
-		row.add_child(_label("・%s%s" % [p.get("name"), host_mark], 22))
+		row.add_child(_label("・%s%s「%s」" % [p.get("name"), host_mark, p.get("chant", DEFAULT_CHANT)], 22))
 		if is_host and p.get("isCpu"):
 			var pid := str(p.get("id"))
 			row.add_child(_button("外す", func(): _send_action({"type": "room.removeCpu", "id": pid})))
@@ -319,8 +328,9 @@ func _render_game() -> void:
 	var s := state
 	var phase := str(s.get("phase"))
 	var players: Array = s.get("players", [])
-	var caller_id := str(s.get("callerId"))
 	var reveal = s.get("lastReveal")
+	# 公開中は「今回コールした人」を基準にする（サーバの callerId は次の人に進んでいる）
+	var caller_id := str(reveal.get("callerId")) if phase == "reveal" and reveal is Dictionary else str(s.get("callerId"))
 	var me := _player(my_id)
 
 	# 上部バー
@@ -336,7 +346,8 @@ func _render_game() -> void:
 	if ids != table_ids:
 		table_ids = ids
 		table.setup(ids, my_id)
-	var show_reveal := phase in ["reveal", "gameEnd", "matchEnd"] and reveal is Dictionary
+	var holding := Time.get_ticks_msec() < reveal_hold_until
+	var show_reveal := phase in ["reveal", "gameEnd", "matchEnd"] and reveal is Dictionary and not holding
 	var calling := phase in ["announce", "input", "reveal"]
 	for p in players:
 		var id := str(p.get("id"))
@@ -373,7 +384,10 @@ func _render_game() -> void:
 			table.center_small = "%s のコール" % ("あなた" if caller_id == my_id else _name_of(caller_id))
 			table.center_big = str(maxi(my_call, 0)) if caller_id == my_id else "？"
 		"reveal":
-			if reveal is Dictionary:
+			if holding or chant_overlay.visible:
+				table.center_small = ""
+				table.center_big = ""
+			elif reveal is Dictionary:
 				table.center_small = "合計 %d … %s" % [int(reveal.get("total", 0)), "あたり！" if reveal.get("hit") else "はずれ"]
 				table.center_big = str(int(reveal.get("call"))) if reveal.get("call") != null else "―"
 		_:
@@ -394,7 +408,7 @@ func _render_game() -> void:
 			else:
 				phase_label.text = "%s のコール … 指を決めて「決定」！" % caller_name
 		"reveal":
-			phase_label.text = _reveal_text(reveal)
+			phase_label.text = "%s …" % _chant_of(caller_id) if holding else _reveal_text(reveal)
 		"gameEnd":
 			var gp: Array = s.get("gamePlacements", [])
 			phase_label.text = "ゲーム %d 終了：%s の勝ち抜け！" % [int(s.get("gameNo", 1)), _name_of(str(gp[0])) if gp.size() > 0 else "?"]
@@ -450,7 +464,7 @@ func _reveal_text(reveal) -> String:
 	var total := int(reveal.get("total", 0))
 	if reveal.get("call") == null:
 		return "%s はコールできず… 合計 %d" % [caller, total]
-	var head := "いっせーので、%d！ → 合計 %d" % [int(reveal.get("call")), total]
+	var head := "%s、%d！ → 合計 %d" % [_chant_of(str(reveal.get("callerId"))), int(reveal.get("call")), total]
 	if reveal.get("hit"):
 		var fin: Array = reveal.get("finished", [])
 		return "%s  的中！ %s%s" % [head, caller, " 勝ち抜け！" if fin.size() > 0 else " の手が減った"]
@@ -528,6 +542,83 @@ func _press_ready() -> void:
 	net.send({"type": "input.ready", "roundId": int(state.get("roundId"))})
 	sfx.play("ready")
 	_render_game()
+
+
+func _my_chant() -> String:
+	var t := chant_edit.text.strip_edges() if chant_edit != null else ""
+	return t if t != "" else DEFAULT_CHANT
+
+
+func _save_chant() -> void:
+	var chant := _my_chant()
+	chant_edit.text = chant
+	var idx := CHANT_PRESETS.find(chant)
+	chant_option.select(idx if idx >= 0 else CHANT_PRESETS.size())
+	if cfg.get_value("player", "chant", "") == chant and net.player_chant == chant:
+		return
+	cfg.set_value("player", "chant", chant)
+	cfg.save(SETTINGS_PATH)
+	net.player_chant = chant
+	if net.is_open():
+		net.send({"type": "profile.update", "chant": chant})
+	_toast("掛け声を「%s」にしました" % chant)
+
+
+func _chant_of(id: String) -> String:
+	var c := str(_player(id).get("chant", ""))
+	return c if c != "" else DEFAULT_CHANT
+
+
+## 公開の演出：コーラーの掛け声を 1 文字ずつ → こぶしを振る → 数字がドン！ → 手を開く → 当たり/はずれ
+func _play_reveal_anim() -> void:
+	_stop_reveal_anim()
+	var reveal = state.get("lastReveal")
+	if not reveal is Dictionary:
+		return
+	var chant := _chant_of(str(reveal.get("callerId")))
+	var n := chant.length()
+	var step := clampf(0.75 / maxf(n, 1), 0.06, 0.12)
+	var chant_time := step * n + 0.1
+	reveal_hold_until = Time.get_ticks_msec() + int(chant_time * 1000)
+	for seat in table.seats.values():
+		seat.hand.pump(chant_time)
+	chant_overlay.visible = true
+	chant_overlay.modulate = Color.WHITE
+	chant_label.text = ""
+	num_label.text = ""
+	var call_text := "%d！" % int(reveal.get("call")) if reveal.get("call") != null else "…"
+	var hit := bool(reveal.get("hit"))
+	reveal_tween = create_tween()
+	for i in n:
+		var k := i
+		reveal_tween.tween_callback(func():
+			chant_label.text = chant.substr(0, k + 1)
+			sfx.play("blip%d" % mini(k, 5)))
+		reveal_tween.tween_interval(step)
+	reveal_tween.tween_interval(0.1)
+	reveal_tween.tween_callback(func():
+		chant_label.text = chant + "、"
+		num_label.text = call_text
+		num_label.pivot_offset = num_label.size / 2
+		num_label.scale = Vector2(2.4, 2.4)
+		sfx.play("shout")
+		_render_game())
+	reveal_tween.tween_property(num_label, "scale", Vector2.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	reveal_tween.tween_interval(0.35)
+	reveal_tween.tween_callback(func(): sfx.play("hit" if hit else "miss"))
+	reveal_tween.tween_interval(0.8)
+	reveal_tween.tween_property(chant_overlay, "modulate:a", 0.0, 0.25)
+	reveal_tween.tween_callback(func():
+		chant_overlay.visible = false
+		_render_game())
+
+
+func _stop_reveal_anim() -> void:
+	if reveal_tween != null and reveal_tween.is_valid():
+		reveal_tween.kill()
+	reveal_hold_until = 0
+	if chant_overlay != null:
+		chant_overlay.visible = false
 
 
 func _toggle_sound() -> void:
@@ -612,8 +703,10 @@ func _autoplay_step(type: String) -> void:
 		_press_ready()
 		get_tree().create_timer(1.8).timeout.connect(func(): _shot("input"))
 		return
-	if type == "round.reveal" and int(state.get("round", 0)) >= 3:
-		_shot("reveal")
+	if type == "round.reveal" and int(state.get("round", 0)) >= 3 and not shots_taken.has("reveal_sched"):
+		shots_taken["reveal_sched"] = true
+		get_tree().create_timer(0.3).timeout.connect(func(): _shot("chant"))
+		get_tree().create_timer(1.3).timeout.connect(func(): _shot("reveal"))
 	if type == "match.end":
 		await _shot("result")
 	if type == "round.input":
@@ -629,7 +722,7 @@ func _autoplay_step(type: String) -> void:
 		if randf() < 0.1:
 			net.send({"type": "emote", "id": randi_range(0, EMOTES.size() - 1)})
 	elif type == "round.reveal":
-		print("AUTOPLAY_ROUND ", phase_label.text)
+		print("AUTOPLAY_ROUND ", _reveal_text(state.get("lastReveal")))
 	elif type == "match.end":
 		print("AUTOPLAY_RESULT ", result_label.text.replace("\n", " / "))
 		get_tree().quit(0)
@@ -651,7 +744,7 @@ func _shot(tag: String) -> void:
 func _build_title() -> void:
 	title_screen = _screen()
 	var box := _board(title_screen, 14)
-	var title := _label("YUBISUMA ONLINE", 56)
+	var title := _label("YUBISUMA ONLINE", 50)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_color_override("font_color", CHALK_YELLOW)
 	box.add_child(title)
@@ -671,7 +764,34 @@ func _build_title() -> void:
 	form.add_child(name_edit)
 	form.add_child(_label("サーバ"))
 	form.add_child(server_edit)
+	form.add_child(_label("掛け声"))
+	var chant_row := _hbox(8)
+	chant_option = OptionButton.new()
+	for i in CHANT_PRESETS.size():
+		chant_option.add_item(CHANT_PRESETS[i], i)
+	chant_option.add_item("自由に入力", CHANT_PRESETS.size())
+	chant_edit = LineEdit.new()
+	chant_edit.max_length = 12
+	chant_edit.custom_minimum_size.x = 200
+	chant_edit.text = cfg.get_value("player", "chant", DEFAULT_CHANT)
+	var idx := CHANT_PRESETS.find(chant_edit.text)
+	chant_option.select(idx if idx >= 0 else CHANT_PRESETS.size())
+	chant_option.item_selected.connect(func(i: int):
+		if i < CHANT_PRESETS.size():
+			chant_edit.text = CHANT_PRESETS[i]
+			_save_chant()
+		else:
+			chant_edit.grab_focus())
+	chant_edit.text_submitted.connect(func(_t): _save_chant())
+	chant_edit.focus_exited.connect(_save_chant)
+	chant_row.add_child(chant_option)
+	chant_row.add_child(chant_edit)
+	form.add_child(chant_row)
 	box.add_child(form)
+	var chant_hint := _label("地域で違う掛け声に。自分がコールするとき、全員の画面にこの掛け声が出ます", 14)
+	chant_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	chant_hint.modulate = Color(1, 1, 1, 0.7)
+	box.add_child(chant_hint)
 
 	var modes := _hbox(12)
 	modes.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -804,6 +924,30 @@ func _build_game() -> void:
 	table.offset_top = 168
 	table.offset_bottom = -122
 	game_screen.add_child(table)
+
+	# 掛け声の演出（机の上に大きく出す）
+	chant_overlay = CenterContainer.new()
+	chant_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	chant_overlay.offset_top = 168
+	chant_overlay.offset_bottom = -122
+	chant_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chant_overlay.visible = false
+	var chant_box := _vbox(0)
+	chant_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	chant_overlay.add_child(chant_box)
+	chant_label = _label("", 60)
+	chant_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	chant_label.add_theme_color_override("font_color", Color.WHITE)
+	chant_label.add_theme_color_override("font_outline_color", Color("5a3418"))
+	chant_label.add_theme_constant_override("outline_size", 16)
+	chant_box.add_child(chant_label)
+	num_label = _label("", 110)
+	num_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	num_label.add_theme_color_override("font_color", Color("ff5645"))
+	num_label.add_theme_color_override("font_outline_color", Color.WHITE)
+	num_label.add_theme_constant_override("outline_size", 22)
+	chant_box.add_child(num_label)
+	game_screen.add_child(chant_overlay)
 
 	# 黒板（進行・タイマー）
 	var board := PanelContainer.new()

@@ -65,9 +65,19 @@ export const defaultTimings: Timings = {
   reconnectGraceMs: 30000,
 };
 
+/** 掛け声（地域差がある）。コールした人の掛け声が全員の画面に出る */
+export const DEFAULT_CHANT = "いっせーのーで";
+export const CHANT_PRESETS = ["いっせーのーで", "いっせーので", "せーの", "ゆびスマ", "いっせっせーの", "いっせーの", "チッチ"];
+
+export function sanitizeChant(v: unknown): string {
+  const s = typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 12) : "";
+  return s || DEFAULT_CHANT;
+}
+
 export interface Member {
   id: string;
   name: string;
+  chant: string;
   isCpu: boolean;
   cpuLevel: CpuLevel;
   connected: boolean;
@@ -142,11 +152,11 @@ export class Room {
 
   // ───────── メンバー管理 ─────────
 
-  addMember(id: string, name: string): void {
+  addMember(id: string, name: string, chant: string = DEFAULT_CHANT): void {
     if (this.inMatch) throw new Error("対戦中のため参加できません");
     if (this.isFull) throw new Error("ルームが満員です");
     if (this.members.some((m) => m.id === id)) return;
-    this.members.push({ id, name, isCpu: false, cpuLevel: 2, connected: true });
+    this.members.push({ id, name, chant: sanitizeChant(chant), isCpu: false, cpuLevel: 2, connected: true });
     this.hostId ??= id;
     this.broadcast("room.update");
   }
@@ -155,7 +165,15 @@ export class Room {
     if (this.inMatch) throw new Error("対戦中は追加できません");
     if (this.isFull) throw new Error("ルームが満員です");
     const id = `cpu-${this.code}-${++this.cpuSeq}`;
-    this.members.push({ id, name: `CPU ${this.cpuSeq} (Lv${level})`, isCpu: true, cpuLevel: level, connected: true });
+    const chant = CHANT_PRESETS[Math.floor(this.rng() * CHANT_PRESETS.length)];
+    this.members.push({ id, name: `CPU ${this.cpuSeq} (Lv${level})`, chant, isCpu: true, cpuLevel: level, connected: true });
+    this.broadcast("room.update");
+  }
+
+  setChant(id: string, chant: string): void {
+    const m = this.members.find((x) => x.id === id && !x.isCpu);
+    if (!m) return;
+    m.chant = sanitizeChant(chant);
     this.broadcast("room.update");
   }
 
@@ -461,6 +479,7 @@ export class Room {
         return {
           id: m.id,
           name: m.name,
+          chant: m.chant,
           isCpu: m.isCpu,
           connected: m.connected,
           hands: p?.hands ?? null,

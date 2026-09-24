@@ -174,3 +174,23 @@ test("同じトークンで別の場所から接続すると古い接続に kick
   assert.equal(a2.id, a.id);
   a2.close();
 });
+
+test("掛け声は個人設定。コールする人の掛け声が全員に配られる", async () => {
+  const a = await new Bot().connect("関西の人");
+  a.send({ type: "profile.update", chant: "  ゆびスマ\n " });
+  const prof = await a.waitFor((m) => m.type === "profile");
+  assert.equal(prof.profile.chant, "ゆびスマ");
+  const b = await new Bot().connect("関東の人");
+  a.send({ type: "room.create", settings: { maxPlayers: 2 } });
+  const created = await a.waitFor((m) => m.type === "room.update");
+  b.send({ type: "room.join", code: created.state.code });
+  const both = await b.waitFor((m) => m.type === "room.update" && m.state.players.length === 2);
+  const chants = Object.fromEntries(both.state.players.map((p: any) => [p.name, p.chant]));
+  assert.deepEqual(chants, { 関西の人: "ゆびスマ", 関東の人: "いっせーのーで" });
+  b.send({ type: "profile.update", chant: "" });
+  await b.waitFor((m) => m.type === "profile");
+  a.send({ type: "room.leave" });
+  b.send({ type: "room.leave" });
+  a.close();
+  b.close();
+});
