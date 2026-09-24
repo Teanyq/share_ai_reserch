@@ -34,30 +34,43 @@ npm start          # 本番と同じテンポ
 
 サーバは Godot の **Web 版クライアントも一緒に配信** します。公開すれば、友達は URL を開くだけでブラウザから遊べます（Godot のインストール不要）。
 
-**Render（無料）で公開する手順**
+**Fly.io で公開する手順**（東京リージョン。Windows の PowerShell で実行）
 
-1. https://dashboard.render.com で **New → Web Service** を選び、GitHub の `teanyq/share_ai_reserch` を選ぶ
-2. 次のように設定して **Deploy** を押す
+事前に https://fly.io でアカウントを作り、クレジットカードを登録しておく
+（従量課金。この構成は 1 台・未使用時は自動停止なので、目安は最大でも月 2 ドル程度）。
 
-   | 項目 | 値 |
-   | --- | --- |
-   | Branch | `claude/exciting-shannon-bj9xlz`（main にマージした後は `main`） |
-   | Region | Singapore（日本に一番近い） |
-   | Root Directory | `yubisuma/server` |
-   | Runtime / Build Command / Start Command | Node / `npm install` / `npm start` |
-   | Instance Type | Free |
-   | Health Check Path（Advanced） | `/healthz` |
-   | Environment Variables | `NODE_VERSION` = `22.22.0` |
+```powershell
+# 1. Fly.io のコマンド（flyctl）を入れて、ターミナルを開き直してからログイン
+iwr https://fly.io/install.ps1 -useb | iex
+fly auth login
 
-   （Blueprint を使う場合は New → Blueprint で Blueprint Path に `yubisuma/render.yaml` を指定しても同じ設定になります）
-3. 数分で `https://〇〇.onrender.com` が発行されるので、その URL を友達に送る
-4. プライベートマッチは、ルームを作ったあと「招待 URL をコピー」で送れば、開くだけで同じルームに入れる
+# 2. コードを取得（git が無ければ GitHub の「Code → Download ZIP」でも可）
+git clone -b claude/exciting-shannon-bj9xlz https://github.com/teanyq/share_ai_reserch.git
+cd share_ai_reserch\yubisuma\server
 
-無料プランの注意：
-- 15 分アクセスがないとスリープし、次に開いたとき起動に 1 分ほどかかる
-- ディスクが保存されないので、再デプロイや再起動でレートがリセットされる
+# 3. アプリ名を決める（全世界で重複しない英小文字・数字・ハイフン）
+$app = "yubisuma-xxxx"
 
-デスクトップ版（Godot から実行）で公開サーバに繋ぐときは、「サーバ」欄を `wss://〇〇.onrender.com/ws` にします。
+# 4. アプリとデータ保存用ボリュームを作る（初回だけ。ボリュームの警告には y）
+fly apps create $app
+fly volumes create yubisuma_data --region nrt --size 1 -a $app
+
+# 5. デプロイ（ビルドは Fly.io 側で行うので Docker は不要）
+fly deploy -a $app --ha=false
+```
+
+数分で `https://<アプリ名>.fly.dev` が使えるようになるので、その URL を友達に送る。
+プライベートマッチは、ルームを作ったあと「招待 URL をコピー」で送れば、開くだけで同じルームに入れる。
+
+- **マシンは必ず 1 台**（`--ha=false`）。ルームやマッチング待ちはサーバのメモリ上にあるため、2 台に分かれると同じ部屋に入れない
+- 誰も繋いでいないと自動で止まり、アクセスが来ると数秒で起動する
+- レートなどはボリューム（`/data`）に保存されるので、停止・再デプロイでも消えない
+- 更新するとき：`git pull` → `fly deploy -a $app --ha=false`
+- ログを見るとき：`fly logs -a $app`
+
+（別案：Render でも動きます。`yubisuma/render.yaml` を Blueprint として使うか、Root Directory を `yubisuma/server` にした Web Service を作る。ただし一部のネットワークでは `onrender.com` が遮断されている）
+
+デスクトップ版（Godot から実行）で公開サーバに繋ぐときは、「サーバ」欄を `wss://<アプリ名>.fly.dev/ws` にします。
 
 **Web 版を作り直す**（クライアントを変更したとき）
 
@@ -86,7 +99,7 @@ godot --headless --path yubisuma/client -- --autoplay=practice   # practice / ca
 | 項目 | 現状 | 本実装（設計書） |
 | --- | --- | --- |
 | ログイン | サーバが発行するトークンをローカル保存 | Steam 認証チケット |
-| 保存 | `server/data/profiles.json` | PostgreSQL |
+| 保存 | `profiles.json`（Fly.io ではボリュームの `/data`） | PostgreSQL |
 | カジュアルの内部レート | なし | OpenSkill |
 | シーズン・降格保護・ペナルティ段階 | なし | 02 参照 |
 | 絵・音 | コードで描いた仮の手、音なし | 外注 or 自作 |

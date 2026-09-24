@@ -1,0 +1,40 @@
+# Fly.io 設定。デプロイ手順は yubisuma/README.md を参照
+# ルーム・マッチング待ちはメモリ上にあるので、マシンは必ず 1 台で動かすこと（--ha=false）
+
+app = "yubisuma"
+primary_region = "nrt" # 東京
+
+[build]
+
+[env]
+  PORT = "8080"
+  DATA_DIR = "/data"
+
+# レート等を保存する永続ボリューム（マシンが止まっても消えない）
+[mounts]
+  source = "yubisuma_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # 誰も繋いでいないときは止めて料金を節約し、アクセスが来たら数秒で起動する
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 800
+    hard_limit = 1000
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

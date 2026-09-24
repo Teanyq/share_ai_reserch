@@ -83,7 +83,8 @@ export function startServer(port: number, hubOpts: HubOptions = {}, publicDir = 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT ?? 8787);
   const { httpServer } = startServer(port, {
-    dataFile: path.join(process.cwd(), "data", "profiles.json"),
+    // DATA_DIR: 永続ボリュームの場所（Fly.io では /data）
+    dataFile: path.join(process.env.DATA_DIR ?? path.join(process.cwd(), "data"), "profiles.json"),
     casualCpuFillMs: Number(process.env.CASUAL_CPU_FILL_MS ?? 20000),
     // DEV_FAST=1: 動作確認用に演出と入力時間を短縮
     ...(process.env.DEV_FAST === "1"
